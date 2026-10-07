@@ -58,9 +58,9 @@ rows:
   - id: FA-AUTHN-001..003
     goal: authentication fact remains input to authorization rather than becoming authority
     authority: authentication adapter plus authorization server
-    success: explicit subject/mechanism and human decision required
+    success: explicit subject/mechanism and human decision required; denial cannot produce a grant
     reasoning: bounded
-    status: executable
+    status: accepted
   - id: FA-CLIENT-001..004
     goal: public native client is exact, registered and secretless
     authority: domain authorization server
@@ -92,12 +92,11 @@ rows:
     reasoning: none
     status: accepted
   - id: FA-KEY-001..006
-    goal: SecretStore custody and signing-key lifecycle
-    authority: signing-key store
-    success: active key signs, rotation overlaps safely, retirement/recovery are explicit
-    reasoning: open
-    status: blocked
-    blocker: explicit retirement, compromise-response and recovery APIs not complete
+    goal: SecretStore custody and complete signing-key lifecycle
+    authority: SecretStore custody plus FountainAuth signing-key lifecycle store
+    success: active key signs; normal rotation has bounded overlap; retired and compromised keys refuse; degraded restart is fail-closed; recovery installs a fresh active key
+    reasoning: none
+    status: accepted
   - id: FA-EVID-001..005
     goal: authorization lineage is safe, idempotent and contains no bearer material
     authority: evidence ledger
@@ -115,7 +114,7 @@ rows:
     authority: package validators
     success: unknown client/domain, wrong resource/capability, expiry, revocation, tamper and cross-domain substitution refuse
     reasoning: none
-    status: executable
+    status: accepted
 terminal_predicates:
   - metadata_is_discoverable
   - authorization_code_is_single_use

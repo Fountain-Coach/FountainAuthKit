@@ -53,3 +53,20 @@ Evidence:
 - durable snapshot contains neither raw authorization code nor access-token bearer value.
 
 The file adapter serializes mutations through one actor and writes its JSON snapshot atomically with owner-only file permissions. One store actor is the authority for one snapshot file; multi-process shared-file coordination is outside this profile.
+
+
+### Slice E — signing-key lifecycle
+Scenarios: FA-KEY-001..006.
+Authority: SecretStore for private-key custody; FountainAuth signing-key lifecycle store for non-secret state transitions.
+Predicate: normal rotation has a bounded verification deadline; expired overlap refuses; compromise refuses immediately; restart without an active key remains fail-closed; recovery creates a fresh active SecretStore key without reviving compromised material.
+Status: ACCEPTED.
+
+Evidence:
+- lifecycle metadata survives restart;
+- in-flight token verifies during admitted overlap;
+- old key refuses exactly at/after overlap deadline;
+- expired overlap is durably retired;
+- compromised key refuses immediately and loses signing authority;
+- restart after compromise remains degraded/fail-closed;
+- recovery establishes a fresh active key;
+- lifecycle snapshot contains references/state only and no private key bytes.

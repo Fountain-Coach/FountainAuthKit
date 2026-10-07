@@ -4,7 +4,7 @@ Date: 2026-10-07
 
 ## Result
 
-**Public repository promotion: PASS. First semantic release: BLOCKED.**
+**Public repository promotion: PASS. First semantic release gates: PASS.**
 
 The existing governed FountainAuthKit implementation has been promoted into its own public repository and extended with exact multi-domain resolution and a typed `host.describe` protected-resource admission contract.
 
@@ -23,19 +23,23 @@ The existing governed FountainAuthKit implementation has been promoted into its 
 | Protected-resource `host.describe` contract | PASS | typed admission test |
 | Restart-safe client/code/revocation/domain state | PASS | file authority-state store + restart/replay/race tests |
 | Raw bearer exclusion from authority snapshot | PASS | code digest + token-ID persistence tests |
-| Complete signing-key retirement/compromise/recovery | **BLOCKED** | rotation overlap exists; retirement/recovery API incomplete |
+| Complete signing-key retirement/compromise/recovery | PASS | restart-persistent lifecycle + overlap/retirement/compromise/recovery test |
 | Live Reframe/HTTP/MCP integration | NOT CLAIMED | consumer integration is external to this package |
 | Public issuer / DNS / TLS edge | NOT CLAIMED | not deployed by this promotion |
 | External security review | NOT CLAIMED | no review performed |
 
 ## Release decision
 
-Do **not** create a version tag or GitHub release yet. Durable authority recovery is now proven. The remaining implementation-kit release blocker is the complete signing-key retirement / compromise-response / recovery lifecycle.
+All implementation-kit gates for the first Swift package release are now closed. This establishes a releasable library profile; it does **not** claim a live public issuer, OpenID Connect provider behavior, external security review, or completed Reframe/HTTP/MCP deployment.
 
 ## Slice D evidence
 
 `FountainAuthFileAuthorityStateStore` persists a domain-partitioned JSON snapshot with owner-only permissions and atomic file replacement. Authorization codes are keyed by SHA-256 digest; raw code values are returned to the client but never written to the snapshot. Revocation stores token identifiers, not token strings. Tests reconstruct the store/server/runtime and prove client continuity, one-time code redemption, replay refusal, concurrent single consumption, revocation continuity, domain admission continuity, explicit runtime rebinding, and unknown-domain refusal.
 
-## Next bounded slice
+## Slice E evidence
 
-Implement explicit signing-key states and lifecycle transitions: active -> overlap verification -> retired, plus compromise response and recovery. Prove retired-key refusal after the bounded overlap window and recovery without exposing private key material.
+Signing-key lifecycle metadata is durable and non-secret. Normal rotation converts the previous active key to verification-only with an explicit deadline. Validation excludes it at and after that deadline. Expired overlap can be durably retired. Compromise immediately excludes the key from verification and removes active signing authority; restart in that degraded state remains fail-closed. Recovery creates a fresh SecretStore key and records it as active without reviving compromised material.
+
+## Release boundary
+
+The accepted first release is the Swift package and its executable contracts. Public domain deployment, HTTP projection, Reframe user experience integration and external security review remain separate integration/operations work and are not prerequisites for the package's semantic version.

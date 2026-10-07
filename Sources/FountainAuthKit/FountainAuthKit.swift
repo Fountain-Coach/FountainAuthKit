@@ -44,6 +44,9 @@ public enum FountainAuthError: Error, Equatable, Sendable {
     case keyAlreadyExists
     case evidenceConflict
     case authorityStateConflict
+    case invalidKeyLifecycle
+    case keyRetired
+    case keyCompromised
 }
 
 public struct FountainAuthServerMetadata: Codable, Equatable, Sendable {
@@ -259,7 +262,93 @@ public struct FountainAuthSigningKey: Sendable {
 
 public protocol FountainAuthSigningKeyStore: Sendable {
     func activeSigningKey() async throws -> FountainAuthSigningKey
-    func verificationKeys() async throws -> [String: Data]
+    func verificationKeys(now: Date) async throws -> [String: Data]
+}
+
+public extension FountainAuthSigningKeyStore {
+    func verificationKeys() async throws -> [String: Data] {
+        try await verificationKeys(now: Date())
+    }
+}
+
+public enum FountainAuthSigningKeyState: String, Codable, Equatable, Sendable {
+    case active
+    case verificationOverlap
+    case retired
+    case compromised
+}
+
+public struct FountainAuthSigningKeyLifecycleRecord: Codable, Equatable, Sendable {
+    public let reference: FountainAuthSecretKeyReference
+    public let state: FountainAuthSigningKeyState
+    public let activatedAt: Date
+    public let verificationUntil: Date?
+    public let stateChangedAt: Date
+
+    public init(reference: FountainAuthSecretKeyReference,
+                state: FountainAuthSigningKeyState,
+                activatedAt: Date,
+                verificationUntil: Date? = nil,
+                stateChangedAt: Date) throws {
+        if state == .verificationOverlap {
+            guard let verificationUntil, verificationUntil > stateChangedAt else {
+                throw FountainAuthError.invalidKeyLifecycle
+            }
+        } else if verificationUntil != nil {
+            throw FountainAuthError.invalidKeyLifecycle
+        }
+        self.reference = reference
+        self.state = state
+        self.activatedAt = activatedAt
+        self.verificationUntil = verificationUntil
+        self.stateChangedAt = stateChangedAt
+    }
+}
+
+public protocol FountainAuthSigningKeyLifecycleStore: Sendable {
+    func load() async throws -> [FountainAuthSigningKeyLifecycleRecord]
+    func save(_ records: [FountainAuthSigningKeyLifecycleRecord]) async throws
+}
+
+public actor FountainAuthMemorySigningKeyLifecycleStore: FountainAuthSigningKeyLifecycleStore {
+    private var records: [FountainAuthSigningKeyLifecycleRecord]
+
+    public init(records: [FountainAuthSigningKeyLifecycleRecord] = []) {
+        self.records = records
+    }
+
+    public func load() async throws -> [FountainAuthSigningKeyLifecycleRecord] { records }
+    public func save(_ records: [FountainAuthSigningKeyLifecycleRecord]) async throws { self.records = records }
+}
+
+public actor FountainAuthFileSigningKeyLifecycleStore: FountainAuthSigningKeyLifecycleStore {
+    private let fileURL: URL
+
+    public init(fileURL: URL) throws {
+        guard fileURL.isFileURL else { throw FountainAuthError.invalidRequest }
+        self.fileURL = fileURL
+    }
+
+    public func load() async throws -> [FountainAuthSigningKeyLifecycleRecord] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        return try JSONDecoder().decode([FountainAuthSigningKeyLifecycleRecord].self,
+                                        from: Data(contentsOf: fileURL))
+    }
+
+    public func save(_ records: [FountainAuthSigningKeyLifecycleRecord]) async throws {
+        try validateLifecycleRecords(records)
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try JSONEncoder().encode(records).write(to: fileURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+}
+
+private func validateLifecycleRecords(_ records: [FountainAuthSigningKeyLifecycleRecord]) throws {
+    guard Set(records.map { $0.reference.keyID }).count == records.count,
+          records.filter({ $0.state == .active }).count <= 1 else {
+        throw FountainAuthError.invalidKeyLifecycle
+    }
 }
 
 /// Opaque host-selected SecretStore location for one EdDSA signing key.
@@ -278,48 +367,193 @@ public struct FountainAuthSecretKeyReference: Codable, Equatable, Hashable, Send
     }
 }
 
-/// Host custody adapter. SecretStore remains the persistence and authorization
-/// authority; this actor only loads key material for signing and verification.
+/// SecretStore owns private-key custody. This actor owns only lifecycle
+/// transitions and references; durable lifecycle metadata never contains key bytes.
 public actor FountainAuthSecretStoreKeyStore: FountainAuthSigningKeyStore {
     private let store: any SecretStore
-    private var activeReference: FountainAuthSecretKeyReference
-    private var verificationReferences: [FountainAuthSecretKeyReference]
+    private let lifecycleStore: any FountainAuthSigningKeyLifecycleStore
+    private var records: [FountainAuthSigningKeyLifecycleRecord]
 
-    public init(store: any SecretStore, active: FountainAuthSecretKeyReference,
+    public init(store: any SecretStore,
+                active: FountainAuthSecretKeyReference,
                 verification: [FountainAuthSecretKeyReference]? = nil) throws {
-        let references = verification ?? [active]
-        guard references.contains(active), Set(references).count == references.count else {
+        let now = Date()
+        let refs = verification ?? [active]
+        guard refs.contains(active), Set(refs).count == refs.count else {
             throw FountainAuthError.invalidSecretReference
         }
-        self.store = store; self.activeReference = active; self.verificationReferences = references
+        self.store = store
+        self.lifecycleStore = FountainAuthMemorySigningKeyLifecycleStore()
+        self.records = try refs.map { ref in
+            if ref == active {
+                return try FountainAuthSigningKeyLifecycleRecord(
+                    reference: ref, state: .active, activatedAt: now, stateChangedAt: now)
+            }
+            return try FountainAuthSigningKeyLifecycleRecord(
+                reference: ref, state: .verificationOverlap, activatedAt: now,
+                verificationUntil: now.addingTimeInterval(600), stateChangedAt: now)
+        }
+    }
+
+    public init(store: any SecretStore,
+                initialActive: FountainAuthSecretKeyReference,
+                lifecycleStore: any FountainAuthSigningKeyLifecycleStore,
+                now: Date = Date()) async throws {
+        self.store = store
+        self.lifecycleStore = lifecycleStore
+        let existing = try await lifecycleStore.load()
+        if existing.isEmpty {
+            guard try store.retrieveSecret(for: initialActive.account) != nil else {
+                throw FountainAuthError.keyUnavailable
+            }
+            let initial = try FountainAuthSigningKeyLifecycleRecord(
+                reference: initialActive, state: .active, activatedAt: now, stateChangedAt: now)
+            self.records = [initial]
+            try await lifecycleStore.save([initial])
+        } else {
+            try validateLifecycleRecords(existing)
+            self.records = existing
+        }
     }
 
     public func activeSigningKey() async throws -> FountainAuthSigningKey {
-        try load(activeReference)
+        guard let active = records.first(where: { $0.state == .active }) else {
+            throw FountainAuthError.keyUnavailable
+        }
+        return try load(active.reference)
     }
 
-    public func verificationKeys() async throws -> [String: Data] {
+    public func verificationKeys(now: Date) async throws -> [String: Data] {
         var keys: [String: Data] = [:]
-        for reference in verificationReferences {
-            let key = try load(reference)
-            keys[key.keyID] = key.publicKey
+        for record in records {
+            let admitted: Bool
+            switch record.state {
+            case .active:
+                admitted = true
+            case .verificationOverlap:
+                admitted = record.verificationUntil.map { now < $0 } == true
+            case .retired, .compromised:
+                admitted = false
+            }
+            if admitted {
+                let key = try load(record.reference)
+                keys[key.keyID] = key.publicKey
+            }
         }
         return keys
     }
 
-    /// Generates and stores a new key without overwriting an existing SecretStore item,
-    /// then retains the old verification references for in-flight token validation.
-    public func rotate(to reference: FountainAuthSecretKeyReference) throws {
-        guard !verificationReferences.contains(reference) else { throw FountainAuthError.keyAlreadyExists }
-        guard try store.retrieveSecret(for: reference.account) == nil else { throw FountainAuthError.keyAlreadyExists }
+    public func rotate(to reference: FountainAuthSecretKeyReference,
+                       overlapUntil: Date,
+                       now: Date = Date()) async throws {
+        guard overlapUntil > now else { throw FountainAuthError.invalidKeyLifecycle }
+        guard !records.contains(where: { $0.reference == reference }) else {
+            throw FountainAuthError.keyAlreadyExists
+        }
+        guard try store.retrieveSecret(for: reference.account) == nil else {
+            throw FountainAuthError.keyAlreadyExists
+        }
         let privateKey = Curve25519.Signing.PrivateKey()
         do {
             try store.storeSecret(privateKey.rawRepresentation, for: reference.account)
         } catch {
             throw FountainAuthError.secretStoreUnavailable
         }
-        activeReference = reference
-        verificationReferences.append(reference)
+
+        var next: [FountainAuthSigningKeyLifecycleRecord] = []
+        for record in records {
+            if record.state == .active {
+                next.append(try FountainAuthSigningKeyLifecycleRecord(
+                    reference: record.reference,
+                    state: .verificationOverlap,
+                    activatedAt: record.activatedAt,
+                    verificationUntil: overlapUntil,
+                    stateChangedAt: now))
+            } else {
+                next.append(record)
+            }
+        }
+        next.append(try FountainAuthSigningKeyLifecycleRecord(
+            reference: reference, state: .active, activatedAt: now, stateChangedAt: now))
+        try await persist(next)
+    }
+
+    public func rotate(to reference: FountainAuthSecretKeyReference) async throws {
+        let now = Date()
+        try await rotate(to: reference, overlapUntil: now.addingTimeInterval(600), now: now)
+    }
+
+    public func retireExpired(now: Date = Date()) async throws {
+        var changed = false
+        var next: [FountainAuthSigningKeyLifecycleRecord] = []
+        for record in records {
+            if record.state == .verificationOverlap,
+               let until = record.verificationUntil,
+               now >= until {
+                next.append(try FountainAuthSigningKeyLifecycleRecord(
+                    reference: record.reference,
+                    state: .retired,
+                    activatedAt: record.activatedAt,
+                    stateChangedAt: now))
+                changed = true
+            } else {
+                next.append(record)
+            }
+        }
+        if changed { try await persist(next) }
+    }
+
+    public func markCompromised(keyID: String, now: Date = Date()) async throws {
+        guard let target = records.first(where: { $0.reference.keyID == keyID }) else {
+            throw FountainAuthError.keyUnavailable
+        }
+        var next: [FountainAuthSigningKeyLifecycleRecord] = []
+        for record in records {
+            if record.reference.keyID == keyID {
+                next.append(try FountainAuthSigningKeyLifecycleRecord(
+                    reference: record.reference,
+                    state: .compromised,
+                    activatedAt: record.activatedAt,
+                    stateChangedAt: now))
+            } else {
+                next.append(record)
+            }
+        }
+        try await persist(next)
+        try? store.deleteSecret(for: target.reference.account)
+    }
+
+    public func recover(with reference: FountainAuthSecretKeyReference,
+                        now: Date = Date()) async throws {
+        guard records.first(where: { $0.state == .active }) == nil else {
+            throw FountainAuthError.invalidKeyLifecycle
+        }
+        guard !records.contains(where: { $0.reference == reference }) else {
+            throw FountainAuthError.keyAlreadyExists
+        }
+        guard try store.retrieveSecret(for: reference.account) == nil else {
+            throw FountainAuthError.keyAlreadyExists
+        }
+        let privateKey = Curve25519.Signing.PrivateKey()
+        do {
+            try store.storeSecret(privateKey.rawRepresentation, for: reference.account)
+        } catch {
+            throw FountainAuthError.secretStoreUnavailable
+        }
+        var next = records
+        next.append(try FountainAuthSigningKeyLifecycleRecord(
+            reference: reference, state: .active, activatedAt: now, stateChangedAt: now))
+        try await persist(next)
+    }
+
+    public func lifecycle() -> [FountainAuthSigningKeyLifecycleRecord] {
+        records
+    }
+
+    private func persist(_ next: [FountainAuthSigningKeyLifecycleRecord]) async throws {
+        try validateLifecycleRecords(next)
+        try await lifecycleStore.save(next)
+        records = next
     }
 
     private func load(_ reference: FountainAuthSecretKeyReference) throws -> FountainAuthSigningKey {
@@ -352,7 +586,7 @@ public actor FountainAuthMemoryKeyStore: FountainAuthSigningKeyStore {
     }
 
     public func activeSigningKey() async throws -> FountainAuthSigningKey { active }
-    public func verificationKeys() async throws -> [String: Data] { verification }
+    public func verificationKeys(now: Date) async throws -> [String: Data] { verification }
 
     public func rotate(keyID: String) throws {
         let key = try FountainAuthSigningKey(keyID: keyID, privateKey: Curve25519.Signing.PrivateKey())
@@ -707,7 +941,7 @@ public actor FountainAuthAuthorizationServer {
               let expiry = payload["exp"] as? NSNumber else {
             throw FountainAuthError.invalidToken
         }
-        guard let publicData = try await keyStore.verificationKeys()[kid],
+        guard let publicData = try await keyStore.verificationKeys(now: now)[kid],
               let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: publicData),
               publicKey.isValidSignature(signature, for: signingInput) else {
             throw FountainAuthError.invalidToken

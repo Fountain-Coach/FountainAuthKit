@@ -14,3 +14,10 @@ A passing unit suite is not a production security review. This repository does n
 The durable authority-state profile may contain public client registrations, authorization request metadata, hashed authorization-code identifiers, authorization event identifiers, token revocation identifiers and admitted issuer identities. It MUST NOT contain raw authorization codes, access tokens, refresh tokens, passwords or private signing keys.
 
 `FountainAuthFileAuthorityStateStore` is a single-owner file profile: one actor owns mutations for one snapshot file and uses atomic replacement. Sharing the same snapshot concurrently between multiple processes is outside the admitted profile.
+
+
+## Signing-key lifecycle
+
+Private signing keys remain in SecretStore. FountainAuthKit persists only key references, state, timestamps and overlap deadlines.
+
+Normal rotation admits the previous key for verification only until an explicit deadline. Compromise bypasses overlap and fails closed immediately. A compromised active key leaves the authority unable to sign until explicit recovery installs a fresh SecretStore key. Retired and compromised keys are never returned as verification keys.

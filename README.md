@@ -6,7 +6,7 @@ FountainAuthKit is the Swift-native authorization boundary for writer-owned Refr
 
 ## Status
 
-This repository is the first public implementation promotion of the existing governed FountainAuthKit seam. The package is usable for local development and contract testing, but **no public production issuer is claimed yet and no release tag is cut yet**. Restart-safe authority persistence is now implemented and tested; complete signing-key retirement, compromise response and recovery remains the first-release implementation blocker.
+FountainAuthKit is the first public implementation of the governed Fountain authorization seam. The `v0.1.0` profile is a reusable Swift package with restart-safe authority state and a complete bounded signing-key lifecycle. **It does not claim a live public production issuer, OpenID Connect provider behavior, external security review, or completed Reframe deployment.**
 
 The current profile implements Authorization Code with Proof Key for Code Exchange (PKCE, S256), exact redirect matching, resource-bound and capability-scoped short-lived signed access tokens, Ed25519/EdDSA signing, SecretStore-backed signing-key custody, durable domain-partitioned client/code/revocation/admission state, safe grant evidence, authorization-server metadata and protected-resource metadata contracts. Raw authorization codes and access-token bearer values are not persisted in authority state.
 
@@ -33,8 +33,6 @@ Authentication is not authorization. The protected resource owns admission. The 
 .package(url: "https://github.com/Fountain-Coach/FountainAuthKit.git", from: "0.1.0")
 ```
 
-The semantic-version dependency above becomes valid only after the first release is tagged. Until then, consumers must not pretend an unreleased commit is a released package.
-
 ## Verification
 
 ```sh
@@ -42,4 +40,4 @@ swift test
 ./Scripts/secret-shape-scan.sh
 ```
 
-See [Scenario/evidence/acceptance-report.md](Scenario/evidence/acceptance-report.md) for the exact acceptance state and blockers.
+See [Scenario/evidence/acceptance-report.md](Scenario/evidence/acceptance-report.md) for the exact acceptance state and release boundary.

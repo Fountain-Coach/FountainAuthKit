@@ -607,3 +607,201 @@ extension FountainAuthKitTests {
     }
 
 }
+
+
+extension FountainAuthKitTests {
+    func testSigningKeyLifecycleSurvivesRestartRetiresAndRecoversAfterCompromise() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-keys-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let lifecycleURL = directory.appendingPathComponent("key-lifecycle.json")
+        let lifecycleStore = try FountainAuthFileSigningKeyLifecycleStore(fileURL: lifecycleURL)
+        let secretStore = TestSecretStore()
+
+        let firstPrivate = Curve25519.Signing.PrivateKey()
+        let first = try FountainAuthSecretKeyReference(keyID: "key-1", account: "account-1")
+        try secretStore.storeSecret(firstPrivate.rawRepresentation, for: first.account)
+
+        let t0 = Date()
+        let keys = try await FountainAuthSecretStoreKeyStore(
+            store: secretStore,
+            initialActive: first,
+            lifecycleStore: lifecycleStore,
+            now: t0)
+
+        let issuer = URL(string: "https://auth.keys.example")!
+        let resource = URL(string: "https://mcp.keys.example")!
+        let redirect = URL(string: "http://reframe.localhost/callback")!
+        let metadata = try durableMetadata(issuer: issuer)
+        let state = FountainAuthMemoryAuthorityStateStore()
+        let server = try FountainAuthAuthorizationServer(
+            metadata: metadata,
+            keyStore: keys,
+            stateStore: state,
+            tokenLifetime: 600)
+        try await server.register(FountainAuthClientRegistration(
+            clientID: "reframe-native", redirectURIs: [redirect]))
+
+        let verifier1 = "key-lifecycle-verifier-123456789012345678901234567"
+        let request1 = try FountainAuthAuthorizationRequest(
+            clientID: "reframe-native",
+            redirectURI: redirect,
+            scope: [FountainAuthHostDescribeAdmission.capability],
+            state: "state-key-1",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier1),
+            resource: resource,
+            correlationID: "corr-key-1",
+            expiresAt: t0.addingTimeInterval(120))
+        let code1 = try await server.begin(
+            request1,
+            subjectReference: "subject:writer",
+            authenticationMechanism: "fixture-authentication-adapter",
+            decision: .approved,
+            now: t0)
+        let token1 = try await server.redeem(
+            code: code1.value,
+            clientID: request1.clientID,
+            redirectURI: request1.redirectURI,
+            verifier: verifier1,
+            resource: resource,
+            now: t0)
+
+        let second = try FountainAuthSecretKeyReference(keyID: "key-2", account: "account-2")
+        let overlapEnd = t0.addingTimeInterval(60)
+        try await keys.rotate(to: second, overlapUntil: overlapEnd, now: t0.addingTimeInterval(1))
+
+        _ = try await server.validate(
+            token1,
+            resource: resource,
+            requiredScope: FountainAuthHostDescribeAdmission.capability,
+            now: t0.addingTimeInterval(30))
+
+        let lifecycleText = try String(contentsOf: lifecycleURL, encoding: .utf8)
+        XCTAssertFalse(lifecycleText.contains(firstPrivate.rawRepresentation.base64EncodedString()))
+        XCTAssertTrue(lifecycleText.contains("verificationOverlap"))
+        XCTAssertTrue(lifecycleText.contains("key-2"))
+
+        let restartedLifecycle = try FountainAuthFileSigningKeyLifecycleStore(fileURL: lifecycleURL)
+        let restartedKeys = try await FountainAuthSecretStoreKeyStore(
+            store: secretStore,
+            initialActive: second,
+            lifecycleStore: restartedLifecycle,
+            now: t0.addingTimeInterval(30))
+        let restartedServer = try FountainAuthAuthorizationServer(
+            metadata: metadata,
+            keyStore: restartedKeys,
+            stateStore: state,
+            tokenLifetime: 600)
+
+        _ = try await restartedServer.validate(
+            token1,
+            resource: resource,
+            requiredScope: FountainAuthHostDescribeAdmission.capability,
+            now: t0.addingTimeInterval(30))
+
+        try await restartedKeys.retireExpired(now: overlapEnd)
+        do {
+            _ = try await restartedServer.validate(
+                token1,
+                resource: resource,
+                requiredScope: FountainAuthHostDescribeAdmission.capability,
+                now: overlapEnd)
+            XCTFail("retired key must not verify after overlap deadline")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .invalidToken)
+        }
+
+        let verifier2 = "key-compromise-verifier-12345678901234567890123456"
+        let request2 = try FountainAuthAuthorizationRequest(
+            clientID: "reframe-native",
+            redirectURI: redirect,
+            scope: [FountainAuthHostDescribeAdmission.capability],
+            state: "state-key-2",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier2),
+            resource: resource,
+            correlationID: "corr-key-2",
+            expiresAt: t0.addingTimeInterval(180))
+        let code2 = try await server.begin(
+            request2,
+            subjectReference: "subject:writer",
+            authenticationMechanism: "fixture-authentication-adapter",
+            decision: .approved,
+            now: t0.addingTimeInterval(70))
+        let token2 = try await server.redeem(
+            code: code2.value,
+            clientID: request2.clientID,
+            redirectURI: request2.redirectURI,
+            verifier: verifier2,
+            resource: resource,
+            now: t0.addingTimeInterval(70))
+
+        try await restartedKeys.markCompromised(keyID: second.keyID, now: t0.addingTimeInterval(80))
+        XCTAssertNil(try secretStore.retrieveSecret(for: second.account))
+        do {
+            _ = try await restartedServer.validate(
+                token2,
+                resource: resource,
+                requiredScope: FountainAuthHostDescribeAdmission.capability,
+                now: t0.addingTimeInterval(81))
+            XCTFail("compromised key must stop verifying immediately")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .invalidToken)
+        }
+        do {
+            _ = try await restartedKeys.activeSigningKey()
+            XCTFail("compromised active key must remove signing authority")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .keyUnavailable)
+        }
+
+        let postCompromiseLifecycle = try FountainAuthFileSigningKeyLifecycleStore(fileURL: lifecycleURL)
+        let postCompromiseKeys = try await FountainAuthSecretStoreKeyStore(
+            store: secretStore,
+            initialActive: second,
+            lifecycleStore: postCompromiseLifecycle,
+            now: t0.addingTimeInterval(85))
+        do {
+            _ = try await postCompromiseKeys.activeSigningKey()
+            XCTFail("restart after compromise must remain fail-closed until recovery")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .keyUnavailable)
+        }
+
+        let recovered = try FountainAuthSecretKeyReference(keyID: "key-3", account: "account-3")
+        try await postCompromiseKeys.recover(with: recovered, now: t0.addingTimeInterval(90))
+        let recoveredActive = try await postCompromiseKeys.activeSigningKey()
+        XCTAssertEqual(recoveredActive.keyID, recovered.keyID)
+        XCTAssertNotNil(try secretStore.retrieveSecret(for: recovered.account))
+
+        let finalRecords = await postCompromiseKeys.lifecycle()
+        XCTAssertEqual(finalRecords.first(where: { $0.reference.keyID == first.keyID })?.state, .retired)
+        XCTAssertEqual(finalRecords.first(where: { $0.reference.keyID == second.keyID })?.state, .compromised)
+        XCTAssertEqual(finalRecords.first(where: { $0.reference.keyID == recovered.keyID })?.state, .active)
+    }
+}
+
+extension FountainAuthKitTests {
+    func testHumanDenialCannotBecomeAuthorization() async throws {
+        let (server, _, _, resource) = try await server()
+        let verifier = "denial-verifier-value-123456789012345678901234567"
+        let request = try FountainAuthAuthorizationRequest(
+            clientID: "native-client",
+            redirectURI: URL(string: "http://app.localhost/callback")!,
+            scope: ["estate.inspect"],
+            state: "state-denied",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier),
+            resource: resource,
+            correlationID: "corr-denied",
+            expiresAt: Date().addingTimeInterval(60))
+        do {
+            _ = try await server.begin(
+                request,
+                subjectReference: "subject:owner-1",
+                authenticationMechanism: "fixture-authentication-adapter",
+                decision: .denied)
+            XCTFail("authentication must not become authorization after human denial")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorizationDenied)
+        }
+    }
+}
