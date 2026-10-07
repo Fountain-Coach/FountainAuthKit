@@ -21,7 +21,8 @@ The existing governed FountainAuthKit implementation has been promoted into its 
 | Safe evidence | PASS | evidence tests + secret-shape scan |
 | SecretStore signing-key custody | PASS | existing custody tests |
 | Protected-resource `host.describe` contract | PASS | typed admission test |
-| Restart-safe client/code/revocation/domain state | **BLOCKED** | current authority state is process-memory |
+| Restart-safe client/code/revocation/domain state | PASS | file authority-state store + restart/replay/race tests |
+| Raw bearer exclusion from authority snapshot | PASS | code digest + token-ID persistence tests |
 | Complete signing-key retirement/compromise/recovery | **BLOCKED** | rotation overlap exists; retirement/recovery API incomplete |
 | Live Reframe/HTTP/MCP integration | NOT CLAIMED | consumer integration is external to this package |
 | Public issuer / DNS / TLS edge | NOT CLAIMED | not deployed by this promotion |
@@ -29,8 +30,12 @@ The existing governed FountainAuthKit implementation has been promoted into its 
 
 ## Release decision
 
-Do **not** create a version tag or GitHub release yet. FCIS-KIT release admission requires the blocked recovery and key-lifecycle gates to be closed and re-executed on a clean release commit.
+Do **not** create a version tag or GitHub release yet. Durable authority recovery is now proven. The remaining implementation-kit release blocker is the complete signing-key retirement / compromise-response / recovery lifecycle.
+
+## Slice D evidence
+
+`FountainAuthFileAuthorityStateStore` persists a domain-partitioned JSON snapshot with owner-only permissions and atomic file replacement. Authorization codes are keyed by SHA-256 digest; raw code values are returned to the client but never written to the snapshot. Revocation stores token identifiers, not token strings. Tests reconstruct the store/server/runtime and prove client continuity, one-time code redemption, replay refusal, concurrent single consumption, revocation continuity, domain admission continuity, explicit runtime rebinding, and unknown-domain refusal.
 
 ## Next bounded slice
 
-Implement a durable, domain-partitioned authority-state protocol and production adapter covering registered clients, authorization-code single-consumption state, revocation state and admitted-domain registry. Prove restart recovery and atomic code consumption. Then add explicit signing-key retirement and compromise/recovery semantics and re-run the scenario matrix.
+Implement explicit signing-key states and lifecycle transitions: active -> overlap verification -> retired, plus compromise response and recovery. Prove retired-key refusal after the bounded overlap window and recovery without exposing private key material.

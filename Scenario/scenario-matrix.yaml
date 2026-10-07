@@ -44,12 +44,11 @@ rows:
     reasoning: none
     status: accepted
   - id: FA-DOM-005
-    goal: domain authority survives process restart
-    authority: durable domain authority state
-    success: exact admitted domains restored without fallback
-    reasoning: open
-    status: blocked
-    blocker: production durable authority-state adapter not implemented
+    goal: domain admission survives process restart
+    authority: FountainAuthAuthorityStateStore
+    success: exact admitted issuer identities restore without fallback and runtime objects require explicit rebinding
+    reasoning: none
+    status: accepted
   - id: FA-META-001..004
     goal: expose strict authorization-server and protected-resource metadata contracts
     authority: package metadata types
@@ -69,9 +68,9 @@ rows:
     reasoning: none
     status: accepted
   - id: FA-CODE-001..007
-    goal: authorization code uses exact redirect, S256 PKCE, expiry and single consumption
-    authority: domain authorization server
-    success: valid exchange succeeds and invalid/replay exchange refuses
+    goal: authorization code uses exact redirect, S256 PKCE, expiry and durable single consumption
+    authority: domain authorization server plus FountainAuthAuthorityStateStore
+    success: raw code is never persisted; digest-bound record survives restart; exactly one redemption succeeds; replay refuses
     reasoning: none
     status: accepted
   - id: FA-GRANT-001..005
@@ -88,11 +87,10 @@ rows:
     status: accepted
   - id: FA-REV-001..004
     goal: revocation refuses a token and survives restart
-    authority: domain authorization server
-    success: revoked token refuses; durable restart keeps revocation
-    reasoning: open
-    status: blocked
-    blocker: revocation is currently process-memory state
+    authority: domain authorization server plus FountainAuthAuthorityStateStore
+    success: token identifier is persisted without bearer value and remains revoked after restart
+    reasoning: none
+    status: accepted
   - id: FA-KEY-001..006
     goal: SecretStore custody and signing-key lifecycle
     authority: signing-key store

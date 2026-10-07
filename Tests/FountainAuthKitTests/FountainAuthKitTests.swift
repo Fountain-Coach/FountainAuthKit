@@ -263,7 +263,7 @@ extension FountainAuthKitTests {
 
         try await runtime.admit(issuer: issuerA, authority: serverA)
         try await runtime.admit(issuer: issuerB, authority: serverB)
-        let admittedIssuers = await runtime.admittedIssuers()
+        let admittedIssuers = try await runtime.admittedIssuers()
         XCTAssertEqual(admittedIssuers, [
             "https://auth.writer-a.example",
             "https://auth.writer-b.example"
@@ -382,7 +382,8 @@ extension FountainAuthKitTests {
         }
 
         var parts = token.value.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        parts[2] = String(parts[2].dropLast()) + (parts[2].last == "A" ? "B" : "A")
+        let originalFirst = parts[2].first!
+        parts[2] = String(originalFirst == "A" ? "B" : "A") + parts[2].dropFirst()
         let tampered = FountainAuthAccessToken(value: parts.joined(separator: "."), evidence: token.evidence)
         do {
             _ = try await server.validate(tampered, resource: resource,
@@ -392,4 +393,217 @@ extension FountainAuthKitTests {
             XCTAssertEqual(error as? FountainAuthError, .invalidToken)
         }
     }
+}
+
+
+extension FountainAuthKitTests {
+    private func durableMetadata(issuer: URL) throws -> FountainAuthServerMetadata {
+        try FountainAuthServerMetadata(
+            issuer: issuer,
+            authorizationEndpoint: issuer.appendingPathComponent("oauth/authorize"),
+            tokenEndpoint: issuer.appendingPathComponent("oauth/token"),
+            jwksURI: issuer.appendingPathComponent(".well-known/jwks.json"),
+            scopesSupported: [FountainAuthHostDescribeAdmission.capability])
+    }
+
+    func testDurableAuthorityStateSurvivesRestartWithoutPersistingBearers() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stateURL = directory.appendingPathComponent("authority-state.json")
+        let issuer = URL(string: "https://auth.restart.example")!
+        let resource = URL(string: "https://mcp.restart.example")!
+        let redirect = URL(string: "http://reframe.localhost/callback")!
+        let metadata = try durableMetadata(issuer: issuer)
+        let keys = try FountainAuthMemoryKeyStore(keyID: "restart-key")
+        let firstStore = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let firstServer = try FountainAuthAuthorizationServer(
+            metadata: metadata,
+            keyStore: keys,
+            stateStore: firstStore,
+            tokenLifetime: 120)
+        try await firstServer.register(FountainAuthClientRegistration(
+            clientID: "reframe-native",
+            redirectURIs: [redirect]))
+
+        let verifier = "restart-verifier-value-123456789012345678901234"
+        let request = try FountainAuthAuthorizationRequest(
+            clientID: "reframe-native",
+            redirectURI: redirect,
+            scope: [FountainAuthHostDescribeAdmission.capability],
+            state: "state-restart",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier),
+            resource: resource,
+            correlationID: "corr-restart",
+            expiresAt: Date().addingTimeInterval(120))
+        let code = try await firstServer.begin(
+            request,
+            subjectReference: "subject:writer",
+            authenticationMechanism: "fixture-authentication-adapter",
+            decision: .approved)
+
+        let afterIssue = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertFalse(afterIssue.contains(code.value))
+        XCTAssertTrue(afterIssue.contains("reframe-native"))
+
+        let secondStore = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let secondServer = try FountainAuthAuthorizationServer(
+            metadata: metadata,
+            keyStore: keys,
+            stateStore: secondStore,
+            tokenLifetime: 120)
+        let token = try await secondServer.redeem(
+            code: code.value,
+            clientID: request.clientID,
+            redirectURI: request.redirectURI,
+            verifier: verifier,
+            resource: resource)
+
+        let afterRedeem = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertFalse(afterRedeem.contains(code.value))
+        XCTAssertFalse(afterRedeem.contains(token.value))
+
+        let thirdStore = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let thirdServer = try FountainAuthAuthorizationServer(
+            metadata: metadata,
+            keyStore: keys,
+            stateStore: thirdStore,
+            tokenLifetime: 120)
+        do {
+            _ = try await thirdServer.redeem(
+                code: code.value,
+                clientID: request.clientID,
+                redirectURI: request.redirectURI,
+                verifier: verifier,
+                resource: resource)
+            XCTFail("consumed authorization code must remain consumed after restart")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .unknownCode)
+        }
+
+        try await thirdServer.revoke(token)
+        let fourthStore = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let fourthServer = try FountainAuthAuthorizationServer(
+            metadata: metadata,
+            keyStore: keys,
+            stateStore: fourthStore,
+            tokenLifetime: 120)
+        do {
+            _ = try await fourthServer.validate(
+                token,
+                resource: resource,
+                requiredScope: FountainAuthHostDescribeAdmission.capability)
+            XCTFail("revocation must survive restart")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
+        }
+
+        let finalSnapshot = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertFalse(finalSnapshot.contains(token.value))
+        XCTAssertFalse(finalSnapshot.contains(code.value))
+    }
+
+    func testDurableDomainRegistrySurvivesRuntimeRestartAndStillFailsClosed() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-domain-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stateURL = directory.appendingPathComponent("authority-state.json")
+        let issuerA = URL(string: "https://auth.a.restart.example")!
+        let issuerB = URL(string: "https://auth.b.restart.example")!
+        let store = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let serverA = try FountainAuthAuthorizationServer(
+            metadata: durableMetadata(issuer: issuerA),
+            keyStore: FountainAuthMemoryKeyStore(),
+            stateStore: store)
+        let serverB = try FountainAuthAuthorizationServer(
+            metadata: durableMetadata(issuer: issuerB),
+            keyStore: FountainAuthMemoryKeyStore(),
+            stateStore: store)
+        let runtime = FountainAuthDomainRuntime(stateStore: store)
+        try await runtime.admit(issuer: issuerA, authority: serverA)
+        try await runtime.admit(issuer: issuerB, authority: serverB)
+
+        let restartedStore = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let restartedRuntime = FountainAuthDomainRuntime(stateStore: restartedStore)
+        let restartedIssuers = try await restartedRuntime.admittedIssuers()
+        XCTAssertEqual(restartedIssuers, [
+            "https://auth.a.restart.example",
+            "https://auth.b.restart.example"
+        ])
+
+        let restartedServerA = try FountainAuthAuthorizationServer(
+            metadata: durableMetadata(issuer: issuerA),
+            keyStore: FountainAuthMemoryKeyStore(),
+            stateStore: restartedStore)
+        try await restartedRuntime.bind(issuer: issuerA, authority: restartedServerA)
+        let rebound = try await restartedRuntime.authority(for: issuerA)
+        let reboundMetadata = await rebound.metadata
+        XCTAssertEqual(reboundMetadata.issuer, issuerA)
+
+        do {
+            _ = try await restartedRuntime.authority(
+                for: URL(string: "https://auth.unknown.restart.example")!)
+            XCTFail("unknown issuer must never fall back after restart")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .invalidIssuer)
+        }
+    }
+
+    func testDurableAuthorizationCodeConsumptionIsAtomicAcrossConcurrentRedeemers() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-race-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stateURL = directory.appendingPathComponent("authority-state.json")
+        let issuer = URL(string: "https://auth.race.example")!
+        let resource = URL(string: "https://mcp.race.example")!
+        let redirect = URL(string: "http://reframe.localhost/callback")!
+        let store = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let keys = try FountainAuthMemoryKeyStore(keyID: "race-key")
+        let server = try FountainAuthAuthorizationServer(
+            metadata: durableMetadata(issuer: issuer),
+            keyStore: keys,
+            stateStore: store)
+        try await server.register(FountainAuthClientRegistration(
+            clientID: "reframe-native", redirectURIs: [redirect]))
+
+        let verifier = "race-verifier-value-123456789012345678901234567"
+        let request = try FountainAuthAuthorizationRequest(
+            clientID: "reframe-native",
+            redirectURI: redirect,
+            scope: [FountainAuthHostDescribeAdmission.capability],
+            state: "state-race",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier),
+            resource: resource,
+            correlationID: "corr-race",
+            expiresAt: Date().addingTimeInterval(120))
+        let code = try await server.begin(
+            request,
+            subjectReference: "subject:writer",
+            authenticationMechanism: "fixture-authentication-adapter",
+            decision: .approved)
+
+        let results = await withTaskGroup(of: Bool.self, returning: [Bool].self) { group in
+            for _ in 0..<2 {
+                group.addTask {
+                    do {
+                        _ = try await server.redeem(
+                            code: code.value,
+                            clientID: request.clientID,
+                            redirectURI: request.redirectURI,
+                            verifier: verifier,
+                            resource: resource)
+                        return true
+                    } catch {
+                        return false
+                    }
+                }
+            }
+            var values: [Bool] = []
+            for await value in group { values.append(value) }
+            return values
+        }
+        XCTAssertEqual(results.filter { $0 }.count, 1)
+        XCTAssertEqual(results.filter { !$0 }.count, 1)
+    }
+
 }

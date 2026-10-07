@@ -6,9 +6,9 @@ FountainAuthKit is the Swift-native authorization boundary for writer-owned Refr
 
 ## Status
 
-This repository is the first public implementation promotion of the existing governed FountainAuthKit seam. The package is usable for local development and contract testing, but **no public production issuer is claimed yet and no release tag is cut yet**. Restart-safe persistence for authorization codes, client registration and revocation state remains a release gate.
+This repository is the first public implementation promotion of the existing governed FountainAuthKit seam. The package is usable for local development and contract testing, but **no public production issuer is claimed yet and no release tag is cut yet**. Restart-safe authority persistence is now implemented and tested; complete signing-key retirement, compromise response and recovery remains the first-release implementation blocker.
 
-The current profile implements Authorization Code with Proof Key for Code Exchange (PKCE, S256), exact redirect matching, resource-bound and capability-scoped short-lived signed access tokens, Ed25519/EdDSA signing, SecretStore-backed signing-key custody, revocation, safe grant evidence, authorization-server metadata and protected-resource metadata contracts.
+The current profile implements Authorization Code with Proof Key for Code Exchange (PKCE, S256), exact redirect matching, resource-bound and capability-scoped short-lived signed access tokens, Ed25519/EdDSA signing, SecretStore-backed signing-key custody, durable domain-partitioned client/code/revocation/admission state, safe grant evidence, authorization-server metadata and protected-resource metadata contracts. Raw authorization codes and access-token bearer values are not persisted in authority state.
 
 It does **not** claim OpenID Connect provider behavior, public `auth.fountain.coach` deployment, an external security review, or completed Reframe user-interface integration.
 

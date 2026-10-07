@@ -38,6 +38,18 @@ Evidence: focused tests. Actual machine description remains outside this package
 
 ### Slice D — recovery
 Scenarios: restart/recovery rows across FA-CODE, FA-REV, FA-DOM.
-Authority: durable authority-state store.
+Authority: `FountainAuthAuthorityStateStore`, with memory fixture and file-backed durable adapter.
 Predicate: client/code/revocation/domain state survives process restart atomically without bearer evidence.
-Status: BLOCKED pending a production durable state adapter/contract implementation. This is a release blocker.
+Status: ACCEPTED.
+
+Evidence:
+- authorization codes persist only as SHA-256 digests plus bounded code records;
+- a pre-restart code can be redeemed after reconstruction exactly once;
+- replay remains refused after another reconstruction;
+- two concurrent redeemers yield exactly one success;
+- revocation persists token identifiers and remains effective after restart;
+- admitted issuer identities survive runtime reconstruction and still require explicit authority rebinding;
+- unknown issuers continue to fail closed;
+- durable snapshot contains neither raw authorization code nor access-token bearer value.
+
+The file adapter serializes mutations through one actor and writes its JSON snapshot atomically with owner-only file permissions. One store actor is the authority for one snapshot file; multi-process shared-file coordination is outside this profile.

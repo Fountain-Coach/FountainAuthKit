@@ -43,6 +43,7 @@ public enum FountainAuthError: Error, Equatable, Sendable {
     case secretStoreUnavailable
     case keyAlreadyExists
     case evidenceConflict
+    case authorityStateConflict
 }
 
 public struct FountainAuthServerMetadata: Codable, Equatable, Sendable {
@@ -359,79 +360,303 @@ public actor FountainAuthMemoryKeyStore: FountainAuthSigningKeyStore {
     }
 }
 
+
+public struct FountainAuthStoredAuthorizationCode: Codable, Equatable, Sendable {
+    public let request: FountainAuthAuthorizationRequest
+    public let subjectReference: String
+    public let authenticationMechanism: String
+    public let approvedAt: Date
+    public let authorizationEventID: String
+    public let expiresAt: Date
+
+    public init(request: FountainAuthAuthorizationRequest,
+                subjectReference: String,
+                authenticationMechanism: String,
+                approvedAt: Date,
+                authorizationEventID: String,
+                expiresAt: Date) {
+        self.request = request
+        self.subjectReference = subjectReference
+        self.authenticationMechanism = authenticationMechanism
+        self.approvedAt = approvedAt
+        self.authorizationEventID = authorizationEventID
+        self.expiresAt = expiresAt
+    }
+}
+
+public protocol FountainAuthAuthorityStateStore: Sendable {
+    func register(client: FountainAuthClientRegistration, issuer: URL) async throws
+    func client(issuer: URL, clientID: String) async throws -> FountainAuthClientRegistration?
+    func storeAuthorizationCode(_ record: FountainAuthStoredAuthorizationCode,
+                                issuer: URL,
+                                codeDigest: String) async throws
+    func consumeAuthorizationCode(issuer: URL,
+                                  codeDigest: String) async throws -> FountainAuthStoredAuthorizationCode?
+    func revokeTokenID(_ tokenID: String, issuer: URL) async throws
+    func isTokenRevoked(_ tokenID: String, issuer: URL) async throws -> Bool
+    func admitIssuer(_ issuer: URL) async throws
+    func admittedIssuers() async throws -> [URL]
+}
+
+private struct FountainAuthAuthorityStateSnapshot: Codable, Sendable {
+    var clients: [String: [String: FountainAuthClientRegistration]] = [:]
+    var authorizationCodes: [String: [String: FountainAuthStoredAuthorizationCode]] = [:]
+    var revokedTokenIDs: [String: Set<String>] = [:]
+    var admittedIssuerStrings: Set<String> = []
+}
+
+public actor FountainAuthMemoryAuthorityStateStore: FountainAuthAuthorityStateStore {
+    private var snapshot = FountainAuthAuthorityStateSnapshot()
+
+    public init() {}
+
+    public func register(client: FountainAuthClientRegistration, issuer: URL) async throws {
+        let key = try canonicalIssuerString(issuer)
+        snapshot.clients[key, default: [:]][client.clientID] = client
+    }
+
+    public func client(issuer: URL, clientID: String) async throws -> FountainAuthClientRegistration? {
+        snapshot.clients[try canonicalIssuerString(issuer)]?[clientID]
+    }
+
+    public func storeAuthorizationCode(_ record: FountainAuthStoredAuthorizationCode,
+                                       issuer: URL,
+                                       codeDigest: String) async throws {
+        let key = try canonicalIssuerString(issuer)
+        guard snapshot.authorizationCodes[key]?[codeDigest] == nil else {
+            throw FountainAuthError.authorityStateConflict
+        }
+        snapshot.authorizationCodes[key, default: [:]][codeDigest] = record
+    }
+
+    public func consumeAuthorizationCode(issuer: URL,
+                                         codeDigest: String) async throws -> FountainAuthStoredAuthorizationCode? {
+        let key = try canonicalIssuerString(issuer)
+        return snapshot.authorizationCodes[key]?.removeValue(forKey: codeDigest)
+    }
+
+    public func revokeTokenID(_ tokenID: String, issuer: URL) async throws {
+        let key = try canonicalIssuerString(issuer)
+        snapshot.revokedTokenIDs[key, default: []].insert(tokenID)
+    }
+
+    public func isTokenRevoked(_ tokenID: String, issuer: URL) async throws -> Bool {
+        snapshot.revokedTokenIDs[try canonicalIssuerString(issuer)]?.contains(tokenID) == true
+    }
+
+    public func admitIssuer(_ issuer: URL) async throws {
+        snapshot.admittedIssuerStrings.insert(try canonicalIssuerString(issuer))
+    }
+
+    public func admittedIssuers() async throws -> [URL] {
+        snapshot.admittedIssuerStrings.sorted().compactMap(URL.init(string:))
+    }
+}
+
+public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStore {
+    private let fileURL: URL
+    private var snapshot: FountainAuthAuthorityStateSnapshot
+
+    public init(fileURL: URL) throws {
+        guard fileURL.isFileURL else { throw FountainAuthError.invalidRequest }
+        self.fileURL = fileURL
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            let data = try Data(contentsOf: fileURL)
+            self.snapshot = try JSONDecoder().decode(FountainAuthAuthorityStateSnapshot.self, from: data)
+        } else {
+            self.snapshot = FountainAuthAuthorityStateSnapshot()
+        }
+    }
+
+    public func register(client: FountainAuthClientRegistration, issuer: URL) async throws {
+        let key = try canonicalIssuerString(issuer)
+        snapshot.clients[key, default: [:]][client.clientID] = client
+        try persist()
+    }
+
+    public func client(issuer: URL, clientID: String) async throws -> FountainAuthClientRegistration? {
+        snapshot.clients[try canonicalIssuerString(issuer)]?[clientID]
+    }
+
+    public func storeAuthorizationCode(_ record: FountainAuthStoredAuthorizationCode,
+                                       issuer: URL,
+                                       codeDigest: String) async throws {
+        let key = try canonicalIssuerString(issuer)
+        guard snapshot.authorizationCodes[key]?[codeDigest] == nil else {
+            throw FountainAuthError.authorityStateConflict
+        }
+        snapshot.authorizationCodes[key, default: [:]][codeDigest] = record
+        try persist()
+    }
+
+    public func consumeAuthorizationCode(issuer: URL,
+                                         codeDigest: String) async throws -> FountainAuthStoredAuthorizationCode? {
+        let key = try canonicalIssuerString(issuer)
+        guard let record = snapshot.authorizationCodes[key]?.removeValue(forKey: codeDigest) else { return nil }
+        try persist()
+        return record
+    }
+
+    public func revokeTokenID(_ tokenID: String, issuer: URL) async throws {
+        let key = try canonicalIssuerString(issuer)
+        snapshot.revokedTokenIDs[key, default: []].insert(tokenID)
+        try persist()
+    }
+
+    public func isTokenRevoked(_ tokenID: String, issuer: URL) async throws -> Bool {
+        snapshot.revokedTokenIDs[try canonicalIssuerString(issuer)]?.contains(tokenID) == true
+    }
+
+    public func admitIssuer(_ issuer: URL) async throws {
+        snapshot.admittedIssuerStrings.insert(try canonicalIssuerString(issuer))
+        try persist()
+    }
+
+    public func admittedIssuers() async throws -> [URL] {
+        snapshot.admittedIssuerStrings.sorted().compactMap(URL.init(string:))
+    }
+
+    private func persist() throws {
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(snapshot)
+        try data.write(to: fileURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+}
+
+private func authorizationCodeDigest(_ value: String) -> String {
+    Data(SHA256.hash(data: Data(value.utf8))).map { String(format: "%02x", $0) }.joined()
+}
+
+private func canonicalIssuerString(_ issuer: URL) throws -> String {
+    guard issuer.scheme?.lowercased() == "https",
+          issuer.host?.isEmpty == false,
+          (issuer.path.isEmpty || issuer.path == "/"),
+          issuer.query == nil,
+          issuer.fragment == nil,
+          issuer.user == nil,
+          issuer.password == nil else {
+        throw FountainAuthError.invalidIssuer
+    }
+    return issuer.absoluteString.hasSuffix("/")
+        ? String(issuer.absoluteString.dropLast())
+        : issuer.absoluteString
+}
+
 public actor FountainAuthAuthorizationServer {
     public let metadata: FountainAuthServerMetadata
     public let policyVersion: String
     private let keyStore: any FountainAuthSigningKeyStore
     private let evidenceLedger: (any FountainAuthGrantEvidenceLedger)?
+    private let stateStore: any FountainAuthAuthorityStateStore
     private let codeLifetime: TimeInterval
     private let tokenLifetime: TimeInterval
-    private var clients: [String: FountainAuthClientRegistration] = [:]
-    private var codes: [String: CodeRecord] = [:]
-    private var revokedTokenIDs: Set<String> = []
 
-    private struct CodeRecord: Sendable {
-        let request: FountainAuthAuthorizationRequest
-        let subjectReference: String
-        let authenticationMechanism: String
-        let approvedAt: Date
-        let authorizationEventID: String
-        let code: FountainAuthAuthorizationCode
-    }
-
-    public init(metadata: FountainAuthServerMetadata, keyStore: any FountainAuthSigningKeyStore,
+    public init(metadata: FountainAuthServerMetadata,
+                keyStore: any FountainAuthSigningKeyStore,
                 evidenceLedger: (any FountainAuthGrantEvidenceLedger)? = nil,
+                stateStore: (any FountainAuthAuthorityStateStore)? = nil,
                 policyVersion: String = "fountain-auth-policy-v1",
-                codeLifetime: TimeInterval = 120, tokenLifetime: TimeInterval = 600) throws {
-        guard codeLifetime > 0, tokenLifetime > 0, !policyVersion.isEmpty else { throw FountainAuthError.invalidRequest }
-        self.metadata = metadata; self.keyStore = keyStore; self.evidenceLedger = evidenceLedger; self.policyVersion = policyVersion
-        self.codeLifetime = codeLifetime; self.tokenLifetime = tokenLifetime
+                codeLifetime: TimeInterval = 120,
+                tokenLifetime: TimeInterval = 600) throws {
+        guard codeLifetime > 0, tokenLifetime > 0, !policyVersion.isEmpty else {
+            throw FountainAuthError.invalidRequest
+        }
+        self.metadata = metadata
+        self.keyStore = keyStore
+        self.evidenceLedger = evidenceLedger
+        self.stateStore = stateStore ?? FountainAuthMemoryAuthorityStateStore()
+        self.policyVersion = policyVersion
+        self.codeLifetime = codeLifetime
+        self.tokenLifetime = tokenLifetime
     }
 
-    public func register(_ client: FountainAuthClientRegistration) throws {
-        clients[client.clientID] = client
+    public func register(_ client: FountainAuthClientRegistration) async throws {
+        try await stateStore.register(client: client, issuer: metadata.issuer)
     }
 
-    public func begin(_ request: FountainAuthAuthorizationRequest, subjectReference: String,
-                      authenticationMechanism: String, decision: FountainAuthHumanDecision,
-                      now: Date = Date()) throws -> FountainAuthAuthorizationCode {
+    public func begin(_ request: FountainAuthAuthorizationRequest,
+                      subjectReference: String,
+                      authenticationMechanism: String,
+                      decision: FountainAuthHumanDecision,
+                      now: Date = Date()) async throws -> FountainAuthAuthorizationCode {
         guard decision == .approved else { throw FountainAuthError.authorizationDenied }
         guard !subjectReference.isEmpty, !authenticationMechanism.isEmpty,
-              let registration = clients[request.clientID] else { throw FountainAuthError.invalidClient }
-        try request.validate(against: registration, supportedScopes: Set(metadata.scopesSupported), now: now)
+              let registration = try await stateStore.client(issuer: metadata.issuer,
+                                                             clientID: request.clientID) else {
+            throw FountainAuthError.invalidClient
+        }
+        try request.validate(against: registration,
+                             supportedScopes: Set(metadata.scopesSupported),
+                             now: now)
         let value = randomOpaqueValue()
         let expires = min(request.expiresAt, now.addingTimeInterval(codeLifetime))
+        let authorizationEventID = UUID().uuidString
         let evidence = FountainAuthGrantEvidence(
-            issuer: metadata.issuer, authorizationEventID: UUID().uuidString,
-            subjectReference: subjectReference, clientID: request.clientID,
-            resource: request.resource, requestedScope: request.scope, grantedScope: request.scope,
-            authorizedAt: now, expiresAt: expires, authenticationMechanism: authenticationMechanism,
-            policyVersion: policyVersion, state: "authorized", sessionCorrelationID: request.correlationID)
-        let code = FountainAuthAuthorizationCode(value: value, expiresAt: expires, evidence: evidence)
-        codes[value] = CodeRecord(request: request, subjectReference: subjectReference,
-                                  authenticationMechanism: authenticationMechanism, approvedAt: now,
-                                  authorizationEventID: evidence.authorizationEventID, code: code)
-        return code
+            issuer: metadata.issuer,
+            authorizationEventID: authorizationEventID,
+            subjectReference: subjectReference,
+            clientID: request.clientID,
+            resource: request.resource,
+            requestedScope: request.scope,
+            grantedScope: request.scope,
+            authorizedAt: now,
+            expiresAt: expires,
+            authenticationMechanism: authenticationMechanism,
+            policyVersion: policyVersion,
+            state: "authorized",
+            sessionCorrelationID: request.correlationID)
+        let record = FountainAuthStoredAuthorizationCode(
+            request: request,
+            subjectReference: subjectReference,
+            authenticationMechanism: authenticationMechanism,
+            approvedAt: now,
+            authorizationEventID: authorizationEventID,
+            expiresAt: expires)
+        try await stateStore.storeAuthorizationCode(record,
+                                                    issuer: metadata.issuer,
+                                                    codeDigest: authorizationCodeDigest(value))
+        return FountainAuthAuthorizationCode(value: value, expiresAt: expires, evidence: evidence)
     }
 
-    public func redeem(code value: String, clientID: String, redirectURI: URL, verifier: String,
-                       resource: URL, now: Date = Date()) async throws -> FountainAuthAccessToken {
-        guard let record = codes.removeValue(forKey: value) else { throw FountainAuthError.unknownCode }
-        guard record.code.expiresAt > now else { throw FountainAuthError.codeExpired }
-        guard record.request.clientID == clientID, record.request.redirectURI == redirectURI else { throw FountainAuthError.invalidRedirect }
-        guard record.request.resource == resource else { throw FountainAuthError.resourceMismatch }
-        guard FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier) == record.request.codeChallenge else {
+    public func redeem(code value: String,
+                       clientID: String,
+                       redirectURI: URL,
+                       verifier: String,
+                       resource: URL,
+                       now: Date = Date()) async throws -> FountainAuthAccessToken {
+        guard let record = try await stateStore.consumeAuthorizationCode(
+            issuer: metadata.issuer,
+            codeDigest: authorizationCodeDigest(value)) else {
+            throw FountainAuthError.unknownCode
+        }
+        guard record.expiresAt > now else { throw FountainAuthError.codeExpired }
+        guard record.request.clientID == clientID,
+              record.request.redirectURI == redirectURI else {
+            throw FountainAuthError.invalidRedirect
+        }
+        guard record.request.resource == resource else {
+            throw FountainAuthError.resourceMismatch
+        }
+        guard FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier) ==
+                record.request.codeChallenge else {
             throw FountainAuthError.invalidPKCE
         }
+
         let key = try await keyStore.activeSigningKey()
         let tokenID = UUID().uuidString
         let expires = now.addingTimeInterval(tokenLifetime)
         let header = ["alg": "EdDSA", "kid": key.keyID, "typ": "at+jwt"]
         let payload: [String: Any] = [
-            "iss": metadata.issuer.absoluteString, "sub": record.subjectReference,
-            "client_id": clientID, "aud": resource.absoluteString,
-            "scope": record.request.scope.joined(separator: " "), "iat": now.timeIntervalSince1970,
-            "exp": expires.timeIntervalSince1970, "jti": tokenID,
+            "iss": metadata.issuer.absoluteString,
+            "sub": record.subjectReference,
+            "client_id": clientID,
+            "aud": resource.absoluteString,
+            "scope": record.request.scope.joined(separator: " "),
+            "iat": now.timeIntervalSince1970,
+            "exp": expires.timeIntervalSince1970,
+            "jti": tokenID,
             "authorization_event": record.authorizationEventID
         ]
         let encodedHeader = try jsonBase64(header)
@@ -439,51 +664,85 @@ public actor FountainAuthAuthorizationServer {
         let signingInput = Data("\(encodedHeader).\(encodedPayload)".utf8)
         let signature = try key.privateKey.signature(for: signingInput)
         let grant = FountainAuthGrantEvidence(
-            issuer: metadata.issuer, authorizationEventID: record.authorizationEventID,
-            subjectReference: record.subjectReference, clientID: clientID,
-            resource: resource, requestedScope: record.request.scope, grantedScope: record.request.scope,
-            authorizedAt: record.approvedAt, expiresAt: expires,
+            issuer: metadata.issuer,
+            authorizationEventID: record.authorizationEventID,
+            subjectReference: record.subjectReference,
+            clientID: clientID,
+            resource: resource,
+            requestedScope: record.request.scope,
+            grantedScope: record.request.scope,
+            authorizedAt: record.approvedAt,
+            expiresAt: expires,
             authenticationMechanism: record.authenticationMechanism,
-            policyVersion: policyVersion, state: "issued", sessionCorrelationID: record.code.evidence.sessionCorrelationID)
-        // The host-selected ledger receives only the safe lineage after the
-        // token is issued. The token itself never crosses this evidence seam.
+            policyVersion: policyVersion,
+            state: "issued",
+            sessionCorrelationID: record.request.correlationID)
         try await evidenceLedger?.append(grant)
-        return FountainAuthAccessToken(value: "\(encodedHeader).\(encodedPayload).\(base64URL(signature))", evidence: grant)
+        return FountainAuthAccessToken(
+            value: "\(encodedHeader).\(encodedPayload).\(base64URL(signature))",
+            evidence: grant)
     }
 
-    public func validate(_ token: FountainAuthAccessToken, resource: URL, requiredScope: String,
+    public func validate(_ token: FountainAuthAccessToken,
+                         resource: URL,
+                         requiredScope: String,
                          now: Date = Date()) async throws -> FountainAuthValidatedGrant {
         let parts = token.value.split(separator: ".", omittingEmptySubsequences: false)
-        guard parts.count == 3, let header = jsonObject(parts[0]), let payload = jsonObject(parts[1]),
-              let kid = header["kid"] as? String, let signature = Data(base64URL: String(parts[2])),
+        guard parts.count == 3,
+              let header = jsonObject(parts[0]),
+              let payload = jsonObject(parts[1]),
+              let kid = header["kid"] as? String,
+              let signature = Data(base64URL: String(parts[2])),
               let signingInput = "\(parts[0]).\(parts[1])".data(using: .utf8),
-              let issuer = payload["iss"] as? String, issuer == metadata.issuer.absoluteString,
-              let audience = payload["aud"] as? String, audience == resource.absoluteString,
-              let subject = payload["sub"] as? String, !subject.isEmpty,
+              let issuer = payload["iss"] as? String,
+              issuer == metadata.issuer.absoluteString,
+              let audience = payload["aud"] as? String,
+              audience == resource.absoluteString,
+              let subject = payload["sub"] as? String,
+              !subject.isEmpty,
               let clientID = payload["client_id"] as? String,
               let scopeText = payload["scope"] as? String,
               let tokenID = payload["jti"] as? String,
               let authorizationEventID = payload["authorization_event"] as? String,
-              let expiry = payload["exp"] as? NSNumber else { throw FountainAuthError.invalidToken }
-        guard let publicData = try await keyStore.verificationKeys()[kid],
-              let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: publicData),
-              publicKey.isValidSignature(signature, for: signingInput) else { throw FountainAuthError.invalidToken }
-        guard Date(timeIntervalSince1970: expiry.doubleValue) > now else { throw FountainAuthError.tokenExpired }
-        guard !revokedTokenIDs.contains(tokenID) else { throw FountainAuthError.tokenRevoked }
-        let scopes = scopeText.split(separator: " ").map(String.init)
-        guard scopes.contains(requiredScope) else { throw FountainAuthError.scopeMissing(requiredScope) }
-        return FountainAuthValidatedGrant(issuer: metadata.issuer, subjectReference: subject,
-                                          clientID: clientID, resource: resource, scope: scopes,
-                                          authorizationEventID: authorizationEventID, tokenID: tokenID,
-                                          expiresAt: Date(timeIntervalSince1970: expiry.doubleValue))
-    }
-
-    public func revoke(_ token: FountainAuthAccessToken) throws {
-        let parts = token.value.split(separator: ".")
-        guard parts.count == 3, let payload = jsonObject(parts[1]), let tokenID = payload["jti"] as? String else {
+              let expiry = payload["exp"] as? NSNumber else {
             throw FountainAuthError.invalidToken
         }
-        revokedTokenIDs.insert(tokenID)
+        guard let publicData = try await keyStore.verificationKeys()[kid],
+              let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: publicData),
+              publicKey.isValidSignature(signature, for: signingInput) else {
+            throw FountainAuthError.invalidToken
+        }
+        guard Date(timeIntervalSince1970: expiry.doubleValue) > now else {
+            throw FountainAuthError.tokenExpired
+        }
+        guard try await !stateStore.isTokenRevoked(tokenID, issuer: metadata.issuer) else {
+            throw FountainAuthError.tokenRevoked
+        }
+        let scopes = scopeText.split(separator: " ").map(String.init)
+        guard scopes.contains(requiredScope) else {
+            throw FountainAuthError.scopeMissing(requiredScope)
+        }
+        return FountainAuthValidatedGrant(
+            issuer: metadata.issuer,
+            subjectReference: subject,
+            clientID: clientID,
+            resource: resource,
+            scope: scopes,
+            authorizationEventID: authorizationEventID,
+            tokenID: tokenID,
+            expiresAt: Date(timeIntervalSince1970: expiry.doubleValue))
+    }
+
+    public func revoke(_ token: FountainAuthAccessToken) async throws {
+        let parts = token.value.split(separator: ".")
+        guard parts.count == 3,
+              let payload = jsonObject(parts[1]),
+              let issuer = payload["iss"] as? String,
+              issuer == metadata.issuer.absoluteString,
+              let tokenID = payload["jti"] as? String else {
+            throw FountainAuthError.invalidToken
+        }
+        try await stateStore.revokeTokenID(tokenID, issuer: metadata.issuer)
     }
 }
 
@@ -514,40 +773,37 @@ private extension Data {
 /// Exact, fail-closed resolver for multiple writer-domain authorization authorities.
 /// A shared process may host several domains; it never gains a default/global authority.
 public actor FountainAuthDomainRuntime {
+    private let stateStore: any FountainAuthAuthorityStateStore
     private var authorities: [String: FountainAuthAuthorizationServer] = [:]
 
-    public init() {}
+    public init(stateStore: (any FountainAuthAuthorityStateStore)? = nil) {
+        self.stateStore = stateStore ?? FountainAuthMemoryAuthorityStateStore()
+    }
 
     public func admit(issuer: URL, authority: FountainAuthAuthorizationServer) async throws {
-        let canonical = try Self.canonicalIssuer(issuer)
+        let canonical = try canonicalIssuerString(issuer)
         guard authority.metadata.issuer == issuer else { throw FountainAuthError.issuerMismatch }
-        guard authorities[canonical] == nil else { throw FountainAuthError.invalidIssuer }
+        if authorities[canonical] != nil { throw FountainAuthError.invalidIssuer }
+        try await stateStore.admitIssuer(issuer)
+        authorities[canonical] = authority
+    }
+
+    public func bind(issuer: URL, authority: FountainAuthAuthorizationServer) async throws {
+        let canonical = try canonicalIssuerString(issuer)
+        guard authority.metadata.issuer == issuer else { throw FountainAuthError.issuerMismatch }
+        let admitted = try await stateStore.admittedIssuers().map(canonicalIssuerString)
+        guard admitted.contains(canonical) else { throw FountainAuthError.invalidIssuer }
         authorities[canonical] = authority
     }
 
     public func authority(for issuer: URL) throws -> FountainAuthAuthorizationServer {
-        let canonical = try Self.canonicalIssuer(issuer)
+        let canonical = try canonicalIssuerString(issuer)
         guard let authority = authorities[canonical] else { throw FountainAuthError.invalidIssuer }
         return authority
     }
 
-    public func admittedIssuers() -> [String] {
-        authorities.keys.sorted()
-    }
-
-    private static func canonicalIssuer(_ issuer: URL) throws -> String {
-        guard issuer.scheme?.lowercased() == "https",
-              issuer.host?.isEmpty == false,
-              (issuer.path.isEmpty || issuer.path == "/"),
-              issuer.query == nil,
-              issuer.fragment == nil,
-              issuer.user == nil,
-              issuer.password == nil else {
-            throw FountainAuthError.invalidIssuer
-        }
-        return issuer.absoluteString.hasSuffix("/")
-            ? String(issuer.absoluteString.dropLast())
-            : issuer.absoluteString
+    public func admittedIssuers() async throws -> [String] {
+        try await stateStore.admittedIssuers().map(canonicalIssuerString).sorted()
     }
 }
 
