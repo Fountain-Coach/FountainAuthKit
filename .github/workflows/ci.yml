@@ -1,0 +1,18 @@
+name: Swift
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secret shape scan
+        run: sh Scripts/secret-shape-scan.sh
+      - name: Resolve
+        run: swift package resolve
+      - name: Test
+        run: swift test

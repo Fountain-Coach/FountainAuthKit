@@ -1,0 +1,20 @@
+id: fountainauth-authorization-boundary
+version: 0.1.0
+instrument: fountaincoach.authorization@0.1.0
+operationTopics:
+  - fountaincoach/authorization.discover
+  - fountaincoach/authorization.begin
+  - fountaincoach/authorization.revoke
+permittedResources:
+  - fixture-human-consent
+  - secretstore-backed-signing-key-store
+  - grant-evidence-ledger-contract
+terminalPredicates:
+  - metadata issuer and protected-resource issuer agree
+  - exact redirect and S256 PKCE are required
+  - authorization code is single-use
+  - access token is resource-bound, scoped, expiring, and revocable
+  - grant evidence contains no bearer credential or private key
+  - key rotation retains verification for permitted in-flight tokens
+  - grant evidence is idempotent and conflict-protected by authorization event
+claimBoundary: locally tested deterministic fixture; no production issuer, provider, security review, or public release claim

@@ -1,0 +1,128 @@
+version: 1
+product: FountainAuthKit
+release_profile: first-public-release
+goal_file: GOAL.md
+authority_file: AUTHORITY.md
+invariants:
+  - authentication_is_not_authorization
+  - writer_domain_owns_authority
+  - grant_is_resource_bound
+  - capability_is_explicit
+  - host_owns_host_capability
+  - evidence_contains_no_bearer_credentials
+  - unknown_authority_fails_closed
+  - shared_runtime_does_not_merge_domain_authority
+first_vertical_proof:
+  issuer: https://auth.writer.example
+  client_class: public-native
+  resource: https://mcp.writer.example
+  capability: host.describe
+  flow: authorization-code-pkce
+rows:
+  - id: FA-DOM-001
+    goal: exact issuer resolves its admitted domain authority
+    authority: FountainAuthDomainRuntime
+    success: exact server returned
+    reasoning: none
+    status: accepted
+  - id: FA-DOM-002
+    goal: unknown issuer fails closed
+    authority: FountainAuthDomainRuntime
+    success: invalidIssuer refusal and no fallback
+    reasoning: none
+    status: accepted
+  - id: FA-DOM-003
+    goal: two domains in one runtime keep issuer authority distinct
+    authority: FountainAuthDomainRuntime
+    success: each exact issuer resolves independently
+    reasoning: none
+    status: accepted
+  - id: FA-DOM-004
+    goal: cross-domain token/key substitution fails
+    authority: domain authorization server
+    success: domain B refuses domain A token
+    reasoning: none
+    status: accepted
+  - id: FA-DOM-005
+    goal: domain authority survives process restart
+    authority: durable domain authority state
+    success: exact admitted domains restored without fallback
+    reasoning: open
+    status: blocked
+    blocker: production durable authority-state adapter not implemented
+  - id: FA-META-001..004
+    goal: expose strict authorization-server and protected-resource metadata contracts
+    authority: package metadata types
+    success: metadata is HTTPS/exact and separately discoverable
+    reasoning: none
+    status: accepted
+  - id: FA-AUTHN-001..003
+    goal: authentication fact remains input to authorization rather than becoming authority
+    authority: authentication adapter plus authorization server
+    success: explicit subject/mechanism and human decision required
+    reasoning: bounded
+    status: executable
+  - id: FA-CLIENT-001..004
+    goal: public native client is exact, registered and secretless
+    authority: domain authorization server
+    success: unknown client and redirect mismatch refuse
+    reasoning: none
+    status: accepted
+  - id: FA-CODE-001..007
+    goal: authorization code uses exact redirect, S256 PKCE, expiry and single consumption
+    authority: domain authorization server
+    success: valid exchange succeeds and invalid/replay exchange refuses
+    reasoning: none
+    status: accepted
+  - id: FA-GRANT-001..005
+    goal: grant is subject/client/resource/capability/duration bounded
+    authority: domain authorization server
+    success: safe grant lineage carries bounded facts
+    reasoning: none
+    status: accepted
+  - id: FA-TOKEN-001..008
+    goal: signed token validates issuer, resource, capability, expiry, signature and revocation
+    authority: domain authorization server and protected resource
+    success: valid token admits and adversarial variants refuse
+    reasoning: none
+    status: accepted
+  - id: FA-REV-001..004
+    goal: revocation refuses a token and survives restart
+    authority: domain authorization server
+    success: revoked token refuses; durable restart keeps revocation
+    reasoning: open
+    status: blocked
+    blocker: revocation is currently process-memory state
+  - id: FA-KEY-001..006
+    goal: SecretStore custody and signing-key lifecycle
+    authority: signing-key store
+    success: active key signs, rotation overlaps safely, retirement/recovery are explicit
+    reasoning: open
+    status: blocked
+    blocker: explicit retirement, compromise-response and recovery APIs not complete
+  - id: FA-EVID-001..005
+    goal: authorization lineage is safe, idempotent and contains no bearer material
+    authority: evidence ledger
+    success: safe evidence persists through ledger seam
+    reasoning: none
+    status: accepted
+  - id: FA-HOST-001..004
+    goal: exact host.describe capability is admitted only after grant validation
+    authority: protected resource then host instrument
+    success: typed FountainAuthHostDescribeAdmission is produced; package does not execute host
+    reasoning: none
+    status: accepted
+  - id: FA-SEC-001..008
+    goal: deterministic fail-closed adversarial boundary
+    authority: package validators
+    success: unknown client/domain, wrong resource/capability, expiry, revocation, tamper and cross-domain substitution refuse
+    reasoning: none
+    status: executable
+terminal_predicates:
+  - metadata_is_discoverable
+  - authorization_code_is_single_use
+  - token_is_short_lived_and_resource_bound
+  - protected_resource_validates_before_dispatch
+  - revoked_or_expired_grants_are_refused
+  - signing_key_rotation_is_proven
+  - safe_evidence_contains_no_bearer_material
