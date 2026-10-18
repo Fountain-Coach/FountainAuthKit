@@ -251,12 +251,17 @@ public actor FountainAuthMemoryGrantEvidenceLedger: FountainAuthGrantEvidenceLed
 
 public struct FountainAuthSigningKey: Sendable {
     public let keyID: String
-    fileprivate let privateKey: Curve25519.Signing.PrivateKey
+    // Hold immutable key bytes rather than swift-crypto's non-Sendable key type.
+    // Reconstruct the ephemeral signer per operation; persistent signing-key
+    // custody and authorization stay in the existing SecretStore lifecycle.
+    fileprivate let privateKeyMaterial: Data
     public let publicKey: Data
 
     public init(keyID: String, privateKey: Curve25519.Signing.PrivateKey) throws {
         guard !keyID.isEmpty else { throw FountainAuthError.keyUnavailable }
-        self.keyID = keyID; self.privateKey = privateKey; self.publicKey = privateKey.publicKey.rawRepresentation
+        self.keyID = keyID
+        self.privateKeyMaterial = privateKey.rawRepresentation
+        self.publicKey = privateKey.publicKey.rawRepresentation
     }
 }
 
@@ -896,7 +901,8 @@ public actor FountainAuthAuthorizationServer {
         let encodedHeader = try jsonBase64(header)
         let encodedPayload = try jsonBase64(payload)
         let signingInput = Data("\(encodedHeader).\(encodedPayload)".utf8)
-        let signature = try key.privateKey.signature(for: signingInput)
+        let signer = try Curve25519.Signing.PrivateKey(rawRepresentation: key.privateKeyMaterial)
+        let signature = try signer.signature(for: signingInput)
         let grant = FountainAuthGrantEvidence(
             issuer: metadata.issuer,
             authorizationEventID: record.authorizationEventID,
