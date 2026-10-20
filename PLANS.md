@@ -70,3 +70,9 @@ Evidence:
 - restart after compromise remains degraded/fail-closed;
 - recovery establishes a fresh active key;
 - lifecycle snapshot contains references/state only and no private key bytes.
+
+## Product horizon decision — domain-owned authentication (2026-10-20)
+
+**ACCEPTED / PARKED, not abandoned.** The reusable product opportunity is a governed `auth.<owned-domain>` authority, composable with the Semantic Domain Publisher and independent of a single writer app. `auth.fountain.coach` is the proposed reference deployment, not a live production claim. Detailed rationale, existing reusable evidence, future DoD and revival criteria: [ADR 0001](Docs/decisions/0001-domain-owned-authentication-product-horizon.md).
+
+The native Reframe R38 first authenticated model conversation **must not depend** on completing the new passkey service, Apple Associated Domains entitlement or domain provisioner. Existing safe host authentication may be reused only after genuine trust, owner consent, scoped Composer admission and explicit model invitation are proven. The long-term program remains owned and discoverable; no production work on the domain auth provisioner is currently authorized by this ADR.

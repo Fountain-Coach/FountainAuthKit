@@ -10,6 +10,10 @@ FountainAuthKit answers one practical question inside that model:
 
 **Who is allowed to act for this writing domain?**
 
+## Long-term product decision
+
+Domain-owned authentication is a **reusable product capability**, not a prerequisite for the first Reframe iPad conversation. The independent `auth.<owned-domain>` product horizon, preservation rule and future acceptance criteria are recorded in **[ADR 0001 — Domain-owned authentication](Docs/decisions/0001-domain-owned-authentication-product-horizon.md)**. The capability is preserved but its general-purpose implementation is presently deferred.
+
 ## Why this exists
 
 Most online products begin with an account.
