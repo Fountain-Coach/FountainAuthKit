@@ -621,9 +621,10 @@ extension FountainAuthKitTests {
         } catch {
             XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
         }
-        XCTAssertEqual(try await restarted.revokeAuthorizationEvent(
+        let replayAfterRestart = try await restarted.revokeAuthorizationEvent(
             firstCode.evidence.authorizationEventID,
-            clientID: clientID, resource: resource), .alreadyRevoked)
+            clientID: clientID, resource: resource)
+        XCTAssertEqual(replayAfterRestart, .alreadyRevoked)
 
         let secondRequest = try makeRequest(state: "after-new-consent")
         let secondCode = try await restarted.begin(
@@ -665,8 +666,9 @@ extension FountainAuthKitTests {
         let reopened = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
         let existing = try await reopened.client(issuer: issuer, clientID: "legacy-native")
         XCTAssertEqual(existing?.clientID, "legacy-native")
-        XCTAssertFalse(try await reopened.isAuthorizationEventRevoked(
-            "unknown-legacy-event", issuer: issuer))
+        let legacyRevoked = try await reopened.isAuthorizationEventRevoked(
+            "unknown-legacy-event", issuer: issuer)
+        XCTAssertFalse(legacyRevoked)
     }
 
     func testDurableDomainRegistrySurvivesRuntimeRestartAndStillFailsClosed() async throws {
