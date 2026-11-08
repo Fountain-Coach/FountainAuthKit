@@ -806,6 +806,59 @@ extension FountainAuthKitTests {
             issuer: issuer, clientID: clientID, resource: resource))
     }
 
+    func testLegacyRefreshCompatibilityPreflightPreservesExistingDigestFormatAndRefusesMismatch() throws {
+        let client = try FountainAuthClientRegistration(
+            clientID: "isolated-legacy", redirectURIs: [
+                URL(string: "http://isolated-legacy.localhost/callback")!])
+        let clientBytes = try JSONEncoder().encode([client])
+        let resource = URL(string: "https://mcp.legacy.example/mcp")!
+        let issuedAt = Date(timeIntervalSinceReferenceDate: 700_000_000)
+        let currentDigest = String(repeating: "a", count: 64)
+        let olderDigest = String(repeating: "b", count: 64)
+        var family: [String: Any] = [
+            "familyID": "isolated-legacy-family",
+            "clientID": client.clientID,
+            "resource": resource.absoluteString,
+            "subjectReference": "owner:isolated",
+            "grantedScope": ["host.describe"],
+            "authorizedAt": issuedAt.timeIntervalSinceReferenceDate,
+            "expiresAt": issuedAt.addingTimeInterval(600).timeIntervalSinceReferenceDate,
+            "authorizationEventID": "isolated-authorization-event",
+            "authenticationMechanism": "http-basic-owner",
+            "correlationID": "isolated-correlation",
+            "currentDigest": currentDigest,
+            "consumedDigests": [olderDigest],
+            "revoked": false
+        ]
+        func inspect(_ family: [String: Any]) throws
+            -> FountainAuthLegacyRefreshPreflight.Receipt {
+            try FountainAuthLegacyRefreshPreflight.inspect(
+                clientsJSON: clientBytes,
+                refreshFamiliesJSON: JSONSerialization.data(withJSONObject: [family]),
+                permittedResource: resource)
+        }
+        let receipt = try inspect(family)
+        XCTAssertEqual(receipt.clients, 1)
+        XCTAssertEqual(receipt.refreshFamilies, 1)
+        XCTAssertEqual(receipt.revokedFamilies, 0)
+        XCTAssertEqual(receipt.authorizationEvents, 1)
+
+        family["currentDigest"] = "plaintext-refresh"
+        XCTAssertThrowsError(try inspect(family))
+        family["currentDigest"] = currentDigest
+        family["clientID"] = "not-registered"
+        XCTAssertThrowsError(try inspect(family))
+        family["clientID"] = client.clientID
+        family["resource"] = "https://other-resource.example/mcp"
+        XCTAssertThrowsError(try inspect(family))
+        family["resource"] = resource.absoluteString
+        family["consumedDigests"] = [olderDigest, olderDigest]
+        XCTAssertThrowsError(try inspect(family))
+        family["consumedDigests"] = [olderDigest]
+        family["revoked"] = true
+        XCTAssertEqual(try inspect(family).revokedFamilies, 1)
+    }
+
     func testLegacyAuthoritySnapshotDecodesWithoutIssuedEventIndex() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FountainAuthKit-legacy-" + UUID().uuidString)
