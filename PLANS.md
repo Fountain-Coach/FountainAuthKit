@@ -1,5 +1,8 @@
 # Plan and history-first reconstruction
 
+**Live-legacy compatibility witness — 8 November 2026:** Read-only SSH snapshot of the *actual* live Hetzner `clients.json` and `refresh-families.json` was relayed encrypted to an owner-only ephemeral Ubuntu `/tmp` folder (not Git, no raw records printed). Exact Kit Host OAuth executable `--inspect-frozen-legacy` returned `PASS clients=3 families=1`; one-shot `--import-frozen-legacy` returned `COMPLETE clients=3 families=1`, wrote a `0600` isolated authority snapshot and refused a second import. The synthetic signing key/owner password were generated only in the test directory; production signing key, clients, refresh family, issuer and Caddy were **not modified**. Entire temporary imported state and copied legacy bytes were destroyed, and deletion independently checked. This clears the *real source-record encoding/import* compatibility question but does not establish plaintext ChatGPT refresh-token continuity, public signing-key parity, independent security review, live Store/MCP denial, or physical iPad reconnect. The tested import **must not** be mistaken for a production migration.
+
+
 ## Current release-admission tranche — 8 November 2026 (canonical, not an alternative tracker)
 
 **Target:** advance existing `fountaincoach.authorization@0.1.0` Manage Client Access candidate PR #1 `a9940287a49eb10283c2a1f03aeb83321228026e` to a reviewed, semver-tagged Kit release consumable by Host PR #105; then prove unchanged existing ChatGPT grants through a single-writer Hetzner migration. Native iPad reconnection and Press owner revoke remain final live acceptance, not assumptions.
