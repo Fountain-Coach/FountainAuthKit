@@ -229,6 +229,21 @@ public struct FountainAuthValidatedGrant: Codable, Equatable, Sendable {
     public let authorizationEventID: String
     public let tokenID: String
     public let expiresAt: Date
+
+    /// The Host protected-resource adapter and its independent tests construct
+    /// validated claims through this stable public value boundary.
+    public init(issuer: URL, subjectReference: String, clientID: String,
+                resource: URL, scope: [String], authorizationEventID: String,
+                tokenID: String, expiresAt: Date) {
+        self.issuer = issuer
+        self.subjectReference = subjectReference
+        self.clientID = clientID
+        self.resource = resource
+        self.scope = scope
+        self.authorizationEventID = authorizationEventID
+        self.tokenID = tokenID
+        self.expiresAt = expiresAt
+    }
 }
 
 /// Host-owned persistence seam for safe authorization lineage. A FountainStore

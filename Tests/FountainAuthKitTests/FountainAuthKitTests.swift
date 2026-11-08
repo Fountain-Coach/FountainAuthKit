@@ -4,6 +4,24 @@ import SecretStore
 @testable import FountainAuthKit
 
 final class FountainAuthKitTests: XCTestCase {
+    func testValidatedGrantPublicValueRetainsHostProjectionFields() throws {
+        let issuer = URL(string: "https://auth.public-contract.example")!
+        let resource = URL(string: "https://resource.public-contract.example/mcp")!
+        let expires = Date(timeIntervalSince1970: 2_000_000_000)
+        let grant = FountainAuthValidatedGrant(
+            issuer: issuer, subjectReference: "owner-fixture",
+            clientID: "client-fixture", resource: resource,
+            scope: ["host.describe"], authorizationEventID: "event-fixture",
+            tokenID: "token-fixture", expiresAt: expires)
+        XCTAssertEqual(grant.clientID, "client-fixture")
+        XCTAssertEqual(grant.authorizationEventID, "event-fixture")
+        XCTAssertEqual(grant.resource, resource)
+        let roundTrip = try JSONDecoder().decode(
+            FountainAuthValidatedGrant.self,
+            from: JSONEncoder().encode(grant))
+        XCTAssertEqual(roundTrip, grant)
+    }
+
     func testScenarioProjectionIsCheckedAndBounded() throws {
         let scenarioURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
