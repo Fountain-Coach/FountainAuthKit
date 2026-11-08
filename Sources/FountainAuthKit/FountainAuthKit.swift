@@ -1294,6 +1294,131 @@ public actor FountainAuthAuthorizationServer {
             evidence: grant)
     }
 
+    /// Issue a rotating refresh credential for an explicitly consented PKCE
+    /// authorization-code grant. Persist only its SHA-256 digest, never bearer.
+    public func redeemWithRefresh(code: String, clientID: String, redirectURI: URL,
+                                  verifier: String, resource: URL, now: Date = Date())
+        async throws -> FountainAuthTokenPair {
+        guard metadata.grantTypesSupported.contains("refresh_token") else {
+            throw FountainAuthError.invalidRequest
+        }
+        let access = try await redeem(
+            code: code, clientID: clientID, redirectURI: redirectURI,
+            verifier: verifier, resource: resource, now: now)
+        let refresh = randomOpaqueValue() + randomOpaqueValue()
+        let grant = access.evidence
+        try await stateStore.saveRefreshFamily(FountainAuthRefreshFamily(
+            familyID: UUID().uuidString,
+            clientID: clientID, resource: resource,
+            subjectReference: grant.subjectReference,
+            grantedScope: grant.grantedScope, authorizedAt: grant.authorizedAt,
+            expiresAt: now.addingTimeInterval(refreshLifetime),
+            authorizationEventID: grant.authorizationEventID,
+            authenticationMechanism: grant.authenticationMechanism,
+            correlationID: grant.sessionCorrelationID,
+            currentDigest: authorizationCodeDigest(refresh)),
+            issuer: metadata.issuer)
+        return FountainAuthTokenPair(access: access, refreshToken: refresh)
+    }
+
+    /// Spent refresh credentials revoke the entire authorization family.
+    /// The authority Store persists the new digest BEFORE access is minted.
+    public func rotateRefresh(token: String, clientID: String, resource: URL,
+                              now: Date = Date()) async throws -> FountainAuthTokenPair {
+        guard metadata.grantTypesSupported.contains("refresh_token"),
+              token.count == 64,
+              token.allSatisfy({ $0.isASCII && $0.isHexDigit }) else {
+            throw FountainAuthError.authorizationDenied
+        }
+        let nextRefresh = randomOpaqueValue() + randomOpaqueValue()
+        let family = try await stateStore.rotateRefreshFamily(
+            issuer: metadata.issuer,
+            tokenDigest: authorizationCodeDigest(token),
+            nextDigest: authorizationCodeDigest(nextRefresh),
+            clientID: clientID, resource: resource, now: now)
+        let access = try await mintRefreshAccessToken(family: family, now: now)
+        return FountainAuthTokenPair(access: access, refreshToken: nextRefresh)
+    }
+
+    /// Host owner mediation is mandatory before an adapter invokes this method.
+    public func revokeRefreshFamily(token: String, clientID: String,
+                                    resource: URL) async throws {
+        guard token.count == 64,
+              token.allSatisfy({ $0.isASCII && $0.isHexDigit }) else {
+            throw FountainAuthError.authorizationDenied
+        }
+        try await stateStore.revokeRefreshFamily(
+            issuer: metadata.issuer,
+            tokenDigest: authorizationCodeDigest(token),
+            clientID: clientID, resource: resource)
+    }
+
+    /// One-time, exact-issuer import of a frozen legacy DCR/refresh snapshot.
+    /// No import is permitted if the destination issuer already owns state.
+    public func importLegacy(clientsJSON: Data, refreshFamiliesJSON: Data,
+                             permittedResource: URL) async throws
+        -> FountainAuthLegacyRefreshPreflight.Receipt {
+        let receipt = try FountainAuthLegacyRefreshPreflight.inspect(
+            clientsJSON: clientsJSON,
+            refreshFamiliesJSON: refreshFamiliesJSON,
+            permittedResource: permittedResource)
+        let records = try FountainAuthLegacyRefreshPreflight.decode(
+            clientsJSON: clientsJSON,
+            refreshFamiliesJSON: refreshFamiliesJSON,
+            permittedResource: permittedResource)
+        guard metadata.grantTypesSupported.contains("refresh_token"),
+              Set(records.families.flatMap(\.grantedScope))
+                .isSubset(of: Set(metadata.scopesSupported)) else {
+            throw FountainAuthError.authorizationDenied
+        }
+        try await stateStore.importLegacy(
+            clients: records.clients,
+            refreshFamilies: records.families,
+            issuer: metadata.issuer)
+        return receipt
+    }
+
+    private func mintRefreshAccessToken(family: FountainAuthRefreshFamily,
+                                        now: Date) async throws -> FountainAuthAccessToken {
+        let key = try await keyStore.activeSigningKey()
+        let tokenID = UUID().uuidString
+        let expires = now.addingTimeInterval(tokenLifetime)
+        let header = ["alg": "EdDSA", "kid": key.keyID, "typ": "at+jwt"]
+        let payload: [String: Any] = [
+            "iss": metadata.issuer.absoluteString,
+            "sub": family.subjectReference,
+            "client_id": family.clientID,
+            "aud": family.resource.absoluteString,
+            "scope": family.grantedScope.joined(separator: " "),
+            "iat": now.timeIntervalSince1970,
+            "exp": expires.timeIntervalSince1970,
+            "jti": tokenID,
+            "authorization_event": family.authorizationEventID
+        ]
+        let encodedHeader = try jsonBase64(header)
+        let encodedPayload = try jsonBase64(payload)
+        let signingInput = Data("\(encodedHeader).\(encodedPayload)".utf8)
+        let signature = try key.privateKey.signature(for: signingInput)
+        let grant = FountainAuthGrantEvidence(
+            issuer: metadata.issuer,
+            authorizationEventID: family.authorizationEventID,
+            subjectReference: family.subjectReference,
+            clientID: family.clientID,
+            resource: family.resource,
+            requestedScope: family.grantedScope,
+            grantedScope: family.grantedScope,
+            authorizedAt: family.authorizedAt,
+            expiresAt: expires,
+            authenticationMechanism: family.authenticationMechanism,
+            policyVersion: policyVersion,
+            state: "refreshed",
+            sessionCorrelationID: family.correlationID)
+        try await evidenceLedger?.append(grant)
+        return FountainAuthAccessToken(
+            value: "\(encodedHeader).\(encodedPayload).\(base64URL(signature))",
+            evidence: grant)
+    }
+
     public func validate(_ token: FountainAuthAccessToken,
                          resource: URL,
                          requiredScope: String,
