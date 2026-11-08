@@ -1,5 +1,11 @@
 # Plan and history-first reconstruction
 
+## Slice F2 — Owner read projection from the same authority (8 November 2026)
+
+**Goal:** Fountain Press must select an actual client/grant without owning permission state. **Authority:** Chapter 142 and 161 require one Kit issuer and an owner-authenticated Host; the scenario from `Scenarios/manage-client-access.yaml` requires source-verified grant identity. **Forbidden:** querying legacy registry as an alternate authority, returning raw refresh digests or tokens, showing a cached revocation as current, exposing this reader to public callers, or asserting Host/UI acceptance from a Kit fixture. **Boundary:** `FountainAuthFileOwnerAccessReader` is Kit-owned and read-only; its Host adapter must authenticate the owner, match issuer and use this source on every request. No deployment or grant change in this slice.
+
+**Test gate:** fresh active/revoked projection, issuer isolation, no digest or bearer serialization, and insecure file refusal: **PASS**, Ubuntu Swift 6.3.3 `swift test --jobs 3` **30/30** zero failures, including `testOwnerReadProjectionTracksOneIssuerWithoutExposingRefreshDigests`. The reader never writes and deliberately reads the current file each time. Explicit corrupt-state and dedicated separate-process Host acceptance are still outstanding. This is Kit fixture evidence, not live user acceptance.
+
 ## Slice F1 — Atomic authority mutation after failed persistence (8 November 2026)
 
 **Chapters read:** 07 history-first goal fidelity and phase plan; 08 independently witnessed persisted proof; 73 scenario and negative-path terminal predicates; 91 FCIS-KIT owns authorization-state invariants; 93 build/evidence before release. Published Chapters 142 (one Kit authorization owner) and 161 (owner-visible revoke must match enforced state) remain binding. **Forbidden:** an issuer accepting mutations not committed durably, treating 27/27 as release admission, creating another permission store, altering the deployed ChatGPT refresh grant or choosing a new signing key. **Conflict:** the earlier file-backed state methods mutated their in-memory snapshot before a fallible atomic disk write; new event/refresh methods had correctly used copy-on-write. **Excluded:** Host deployment, real grant mutation, independent Store receipt, Press UX and release authority until native witness is complete.

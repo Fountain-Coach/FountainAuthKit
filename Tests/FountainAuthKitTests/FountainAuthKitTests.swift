@@ -4,6 +4,70 @@ import SecretStore
 @testable import FountainAuthKit
 
 final class FountainAuthKitTests: XCTestCase {
+    func testOwnerReadProjectionTracksOneIssuerWithoutExposingRefreshDigests() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "owner-overview-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stateURL = root.appendingPathComponent("issuer.json")
+        let issuer = URL(string: "https://auth.overview.example")!
+        let resource = URL(string: "https://mcp.overview.example/mcp")!
+        let redirect = URL(string: "http://fixture.localhost/callback")!
+        let source = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let server = try FountainAuthAuthorizationServer(
+            metadata: FountainAuthServerMetadata(
+                issuer: issuer,
+                authorizationEndpoint: issuer.appendingPathComponent("oauth/authorize"),
+                tokenEndpoint: issuer.appendingPathComponent("oauth/token"),
+                jwksURI: issuer.appendingPathComponent(".well-known/jwks.json"),
+                scopesSupported: ["host.describe"],
+                grantTypesSupported: ["authorization_code", "refresh_token"]),
+            keyStore: FountainAuthMemoryKeyStore(keyID: "overview-key"),
+            stateStore: source)
+        try await server.register(FountainAuthClientRegistration(
+            clientID: "overview-client", redirectURIs: [redirect]))
+        let reader = try FountainAuthFileOwnerAccessReader(fileURL: stateURL)
+        let empty = try reader.read(issuer: issuer)
+        XCTAssertEqual(empty.clientIDs, ["overview-client"])
+        XCTAssertTrue(empty.grants.isEmpty)
+
+        let verifier = String(repeating: "z", count: 48)
+        let request = try FountainAuthAuthorizationRequest(
+            clientID: "overview-client", redirectURI: redirect,
+            scope: ["host.describe"], state: "overview-state",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier),
+            resource: resource, correlationID: "overview-correlation",
+            expiresAt: Date().addingTimeInterval(120))
+        let code = try await server.begin(
+            request, subjectReference: "fixture:owner",
+            authenticationMechanism: "isolated-fixture", decision: .approved)
+        let pair = try await server.redeemWithRefresh(
+            code: code.value, clientID: "overview-client", redirectURI: redirect,
+            verifier: verifier, resource: resource)
+        let live = try reader.read(issuer: issuer)
+        XCTAssertEqual(live.grants.count, 1)
+        XCTAssertEqual(live.grants[0].status, "active")
+        XCTAssertEqual(live.grants[0].authorizationEventID,
+                       pair.access.evidence.authorizationEventID)
+        let exposed = String(decoding: try JSONEncoder().encode(live), as: UTF8.self)
+        XCTAssertFalse(exposed.contains(pair.refreshToken))
+        XCTAssertFalse(exposed.contains(pair.access.value))
+        let rawState = try String(contentsOf: stateURL, encoding: .utf8)
+        XCTAssertTrue(rawState.contains("currentDigest"))
+        XCTAssertFalse(exposed.contains("currentDigest"))
+        XCTAssertFalse(exposed.contains("consumedDigests"))
+
+        _ = try await server.revokeAuthorizationEvent(
+            pair.access.evidence.authorizationEventID,
+            clientID: "overview-client", resource: resource)
+        let revoked = try reader.read(issuer: issuer)
+        XCTAssertEqual(revoked.grants[0].status, "revoked")
+        XCTAssertThrowsError(try reader.read(
+            issuer: URL(string: "https://other-overview.example")!))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644], ofItemAtPath: stateURL.path)
+        XCTAssertThrowsError(try reader.read(issuer: issuer))
+    }
+
     func testValidatedGrantPublicValueRetainsHostProjectionFields() throws {
         let issuer = URL(string: "https://auth.public-contract.example")!
         let resource = URL(string: "https://resource.public-contract.example/mcp")!
