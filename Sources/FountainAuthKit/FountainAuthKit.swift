@@ -67,7 +67,8 @@ public struct FountainAuthServerMetadata: Codable, Equatable, Sendable {
               Self.isHTTPS(tokenEndpoint), Self.isHTTPS(jwksURI),
               authorizationEndpoint.host == issuer.host, tokenEndpoint.host == issuer.host,
               jwksURI.host == issuer.host, !scopesSupported.isEmpty,
-              responseTypesSupported == ["code"], grantTypesSupported == ["authorization_code"],
+              responseTypesSupported == ["code"], (grantTypesSupported == ["authorization_code"] ||
+                grantTypesSupported == ["authorization_code", "refresh_token"]),
               codeChallengeMethodsSupported == ["S256"] else { throw FountainAuthError.invalidIssuer }
         self.issuer = issuer; self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint; self.jwksURI = jwksURI
@@ -661,6 +662,14 @@ public protocol FountainAuthAuthorityStateStore: Sendable {
         -> FountainAuthAuthorizationRevokeOutcome
     func isAuthorizationEventRevoked(_ authorizationEventID: String,
                                      issuer: URL) async throws -> Bool
+    func saveRefreshFamily(_ family: FountainAuthRefreshFamily, issuer: URL) async throws
+    func rotateRefreshFamily(issuer: URL, tokenDigest: String, nextDigest: String,
+                             clientID: String, resource: URL, now: Date) async throws
+        -> FountainAuthRefreshFamily
+    func revokeRefreshFamily(issuer: URL, tokenDigest: String,
+                             clientID: String, resource: URL) async throws
+    func importLegacy(clients: [FountainAuthClientRegistration],
+                      refreshFamilies: [FountainAuthRefreshFamily], issuer: URL) async throws
     func admitIssuer(_ issuer: URL) async throws
     func admittedIssuers() async throws -> [URL]
 }
@@ -671,10 +680,11 @@ private struct FountainAuthAuthorityStateSnapshot: Codable, Sendable {
     var revokedTokenIDs: [String: Set<String>] = [:]
     var admittedIssuerStrings: Set<String> = []
     var issuedAuthorizationEvents: [String: [String: FountainAuthIssuedAuthorizationEvent]] = [:]
+    var refreshFamilies: [String: [String: FountainAuthRefreshFamily]] = [:]
 
     private enum CodingKeys: String, CodingKey {
         case clients, authorizationCodes, revokedTokenIDs, admittedIssuerStrings
-        case issuedAuthorizationEvents
+        case issuedAuthorizationEvents, refreshFamilies
     }
 
     init() {}
@@ -695,6 +705,9 @@ private struct FountainAuthAuthorityStateSnapshot: Codable, Sendable {
         issuedAuthorizationEvents = try values.decodeIfPresent(
             [String: [String: FountainAuthIssuedAuthorizationEvent]].self,
             forKey: .issuedAuthorizationEvents) ?? [:]
+        refreshFamilies = try values.decodeIfPresent(
+            [String: [String: FountainAuthRefreshFamily]].self,
+            forKey: .refreshFamilies) ?? [:]
     }
 
     mutating func recordIssued(_ event: FountainAuthIssuedAuthorizationEvent,
@@ -727,6 +740,111 @@ private struct FountainAuthAuthorityStateSnapshot: Codable, Sendable {
     func isIssuedRevoked(_ authorizationEventID: String, issuer: URL) throws -> Bool {
         let key = try canonicalIssuerString(issuer)
         return issuedAuthorizationEvents[key]?[authorizationEventID]?.revoked == true
+    }
+
+    mutating func saveRefresh(_ family: FountainAuthRefreshFamily, issuer: URL) throws {
+        let key = try canonicalIssuerString(issuer)
+        guard clients[key]?[family.clientID] != nil,
+              family.resource.scheme == "https",
+              issuedAuthorizationEvents[key]?[family.authorizationEventID]?.clientID == family.clientID,
+              issuedAuthorizationEvents[key]?[family.authorizationEventID]?.resource == family.resource,
+              issuedAuthorizationEvents[key]?[family.authorizationEventID]?.revoked == false,
+              refreshFamilies[key]?[family.familyID] == nil,
+              !refreshFamilies[key, default: [:]].values.contains(where: {
+                  $0.authorizationEventID == family.authorizationEventID ||
+                  $0.currentDigest == family.currentDigest
+              }) else { throw FountainAuthError.authorityStateConflict }
+        refreshFamilies[key, default: [:]][family.familyID] = family
+    }
+
+    mutating func rotateRefresh(issuer: URL, tokenDigest: String, nextDigest: String,
+                                clientID: String, resource: URL, now: Date) throws
+        -> (family: FountainAuthRefreshFamily, replay: Bool) {
+        let key = try canonicalIssuerString(issuer)
+        guard tokenDigest.count == 64, nextDigest.count == 64,
+              tokenDigest != nextDigest, clients[key]?[clientID] != nil,
+              let family = refreshFamilies[key]?.values.first(where: {
+                  $0.currentDigest == tokenDigest || $0.consumedDigests.contains(tokenDigest)
+              }), family.clientID == clientID, family.resource == resource,
+              !family.revoked, family.expiresAt > now,
+              issuedAuthorizationEvents[key]?[family.authorizationEventID]?.revoked == false else {
+            throw FountainAuthError.authorizationDenied
+        }
+        var changed = family
+        if family.currentDigest != tokenDigest {
+            changed.revoked = true
+            refreshFamilies[key]?[family.familyID] = changed
+            var event = issuedAuthorizationEvents[key]![family.authorizationEventID]!
+            event.revoked = true
+            issuedAuthorizationEvents[key]?[family.authorizationEventID] = event
+            return (changed, true)
+        }
+        guard !refreshFamilies[key, default: [:]].values.contains(where: {
+            $0.currentDigest == nextDigest || $0.consumedDigests.contains(nextDigest)
+        }) else { throw FountainAuthError.authorityStateConflict }
+        changed.consumedDigests.append(tokenDigest)
+        changed.currentDigest = nextDigest
+        refreshFamilies[key]?[family.familyID] = changed
+        return (changed, false)
+    }
+
+    mutating func revokeRefresh(issuer: URL, tokenDigest: String,
+                                clientID: String, resource: URL) throws {
+        let key = try canonicalIssuerString(issuer)
+        guard let family = refreshFamilies[key]?.values.first(where: {
+            $0.currentDigest == tokenDigest || $0.consumedDigests.contains(tokenDigest)
+        }), family.clientID == clientID, family.resource == resource else {
+            throw FountainAuthError.authorizationDenied
+        }
+        var changed = family
+        changed.revoked = true
+        refreshFamilies[key]?[family.familyID] = changed
+        guard var event = issuedAuthorizationEvents[key]?[family.authorizationEventID] else {
+            throw FountainAuthError.authorityStateConflict
+        }
+        event.revoked = true
+        issuedAuthorizationEvents[key]?[family.authorizationEventID] = event
+    }
+
+    mutating func importLegacy(clients registrations: [FountainAuthClientRegistration],
+                               refreshFamilies families: [FountainAuthRefreshFamily],
+                               issuer: URL) throws {
+        let key = try canonicalIssuerString(issuer)
+        // Import is a one-time transaction into an empty issuer namespace.
+        // A live issuer cannot become a second concurrently writable authority.
+        guard clients[key, default: [:]].isEmpty,
+              refreshFamilies[key, default: [:]].isEmpty,
+              issuedAuthorizationEvents[key, default: [:]].isEmpty,
+              !registrations.isEmpty,
+              Set(registrations.map(\.clientID)).count == registrations.count,
+              Set(families.map(\.familyID)).count == families.count,
+              Set(families.map(\.authorizationEventID)).count == families.count else {
+            throw FountainAuthError.authorityStateConflict
+        }
+        let registered = Set(registrations.map(\.clientID))
+        var digests = Set<String>()
+        for family in families {
+            guard registered.contains(family.clientID), !family.authorizationEventID.isEmpty,
+                  family.resource.scheme == "https", !family.grantedScope.isEmpty,
+                  !family.subjectReference.isEmpty, family.expiresAt > family.authorizedAt else {
+                throw FountainAuthError.authorityStateConflict
+            }
+            for digest in [family.currentDigest] + family.consumedDigests {
+                guard digest.count == 64, digest.utf8.allSatisfy({
+                    ($0 >= 48 && $0 <= 57) || ($0 >= 97 && $0 <= 102)
+                }), digests.insert(digest).inserted else {
+                    throw FountainAuthError.authorityStateConflict
+                }
+            }
+        }
+        clients[key] = Dictionary(uniqueKeysWithValues: registrations.map { ($0.clientID, $0) })
+        refreshFamilies[key] = Dictionary(uniqueKeysWithValues: families.map { ($0.familyID, $0) })
+        issuedAuthorizationEvents[key] = Dictionary(uniqueKeysWithValues: families.map {
+            ($0.authorizationEventID,
+             FountainAuthIssuedAuthorizationEvent(
+                authorizationEventID: $0.authorizationEventID,
+                clientID: $0.clientID, resource: $0.resource, revoked: $0.revoked))
+        })
     }
 }
 
@@ -784,6 +902,33 @@ public actor FountainAuthMemoryAuthorityStateStore: FountainAuthAuthorityStateSt
     public func isAuthorizationEventRevoked(_ authorizationEventID: String,
                                             issuer: URL) async throws -> Bool {
         try snapshot.isIssuedRevoked(authorizationEventID, issuer: issuer)
+    }
+
+    public func saveRefreshFamily(_ family: FountainAuthRefreshFamily,
+                                  issuer: URL) async throws {
+        try snapshot.saveRefresh(family, issuer: issuer)
+    }
+
+    public func rotateRefreshFamily(issuer: URL, tokenDigest: String, nextDigest: String,
+                                    clientID: String, resource: URL, now: Date) async throws
+        -> FountainAuthRefreshFamily {
+        let result = try snapshot.rotateRefresh(
+            issuer: issuer, tokenDigest: tokenDigest, nextDigest: nextDigest,
+            clientID: clientID, resource: resource, now: now)
+        if result.replay { throw FountainAuthError.authorizationDenied }
+        return result.family
+    }
+
+    public func revokeRefreshFamily(issuer: URL, tokenDigest: String,
+                                    clientID: String, resource: URL) async throws {
+        try snapshot.revokeRefresh(issuer: issuer, tokenDigest: tokenDigest,
+                                   clientID: clientID, resource: resource)
+    }
+
+    public func importLegacy(clients: [FountainAuthClientRegistration],
+                             refreshFamilies: [FountainAuthRefreshFamily],
+                             issuer: URL) async throws {
+        try snapshot.importLegacy(clients: clients, refreshFamilies: refreshFamilies, issuer: issuer)
     }
 
     public func admitIssuer(_ issuer: URL) async throws {
@@ -873,6 +1018,45 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
     public func isAuthorizationEventRevoked(_ authorizationEventID: String,
                                             issuer: URL) async throws -> Bool {
         try snapshot.isIssuedRevoked(authorizationEventID, issuer: issuer)
+    }
+
+    public func saveRefreshFamily(_ family: FountainAuthRefreshFamily,
+                                  issuer: URL) async throws {
+        var next = snapshot
+        try next.saveRefresh(family, issuer: issuer)
+        try persist(next)
+        snapshot = next
+    }
+
+    public func rotateRefreshFamily(issuer: URL, tokenDigest: String, nextDigest: String,
+                                    clientID: String, resource: URL, now: Date) async throws
+        -> FountainAuthRefreshFamily {
+        var next = snapshot
+        let result = try next.rotateRefresh(
+            issuer: issuer, tokenDigest: tokenDigest, nextDigest: nextDigest,
+            clientID: clientID, resource: resource, now: now)
+        try persist(next)
+        snapshot = next
+        if result.replay { throw FountainAuthError.authorizationDenied }
+        return result.family
+    }
+
+    public func revokeRefreshFamily(issuer: URL, tokenDigest: String,
+                                    clientID: String, resource: URL) async throws {
+        var next = snapshot
+        try next.revokeRefresh(issuer: issuer, tokenDigest: tokenDigest,
+                               clientID: clientID, resource: resource)
+        try persist(next)
+        snapshot = next
+    }
+
+    public func importLegacy(clients: [FountainAuthClientRegistration],
+                             refreshFamilies: [FountainAuthRefreshFamily],
+                             issuer: URL) async throws {
+        var next = snapshot
+        try next.importLegacy(clients: clients, refreshFamilies: refreshFamilies, issuer: issuer)
+        try persist(next)
+        snapshot = next
     }
 
     public func admitIssuer(_ issuer: URL) async throws {
