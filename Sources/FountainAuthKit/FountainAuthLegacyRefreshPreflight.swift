@@ -94,6 +94,7 @@ public enum FountainAuthLegacyRefreshPreflight {
                   family.grantedScope.allSatisfy({ !$0.isEmpty }),
                   family.expiresAt > family.authorizedAt,
                   !family.authorizationEventID.isEmpty,
+                  eventIDs.insert(family.authorizationEventID).inserted,
                   !family.authenticationMechanism.isEmpty,
                   !family.correlationID.isEmpty,
                   family.currentDigest.count == 64,
@@ -103,7 +104,6 @@ public enum FountainAuthLegacyRefreshPreflight {
                   allDigests.insert(family.currentDigest).inserted else {
                 throw FountainAuthError.authorityStateConflict
             }
-            eventIDs.insert(family.authorizationEventID)
             for digest in family.consumedDigests {
                 guard digest.count == 64,
                       digest.utf8.allSatisfy({
