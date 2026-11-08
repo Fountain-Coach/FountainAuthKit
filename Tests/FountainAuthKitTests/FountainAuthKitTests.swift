@@ -859,6 +859,205 @@ extension FountainAuthKitTests {
         XCTAssertEqual(try inspect(family).revokedFamilies, 1)
     }
 
+    func testRefreshRotationReplayRevokesAccessAndNewConsentRestoresIt() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-refresh-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("authority.json")
+        let issuer = URL(string: "https://auth.refresh.example")!
+        let resource = URL(string: "https://mcp.refresh.example/mcp")!
+        let redirect = URL(string: "http://refresh.localhost/callback")!
+        let metadata = try FountainAuthServerMetadata(
+            issuer: issuer,
+            authorizationEndpoint: issuer.appendingPathComponent("oauth/authorize"),
+            tokenEndpoint: issuer.appendingPathComponent("oauth/token"),
+            jwksURI: issuer.appendingPathComponent(".well-known/jwks.json"),
+            scopesSupported: ["host.describe"],
+            grantTypesSupported: ["authorization_code", "refresh_token"])
+        let keys = try FountainAuthMemoryKeyStore(keyID: "refresh-key")
+        let first = try FountainAuthAuthorizationServer(
+            metadata: metadata, keyStore: keys,
+            stateStore: FountainAuthFileAuthorityStateStore(fileURL: path))
+        try await first.register(FountainAuthClientRegistration(
+            clientID: "isolated-refresh", redirectURIs: [redirect]))
+        let verifier = "isolated-refresh-verifier-123456789012345678901234"
+        func request(_ state: String) throws -> FountainAuthAuthorizationRequest {
+            try FountainAuthAuthorizationRequest(
+                clientID: "isolated-refresh", redirectURI: redirect,
+                scope: ["host.describe"], state: state,
+                codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier),
+                resource: resource, correlationID: "refresh-" + state,
+                expiresAt: Date().addingTimeInterval(120))
+        }
+        let firstCode = try await first.begin(
+            request("first"), subjectReference: "owner:isolated",
+            authenticationMechanism: "fixture-consent", decision: .approved)
+        let pair = try await first.redeemWithRefresh(
+            code: firstCode.value, clientID: "isolated-refresh",
+            redirectURI: redirect, verifier: verifier, resource: resource)
+        _ = try await first.validate(pair.access, resource: resource,
+                                     requiredScope: "host.describe")
+        let rotated = try await first.rotateRefresh(
+            token: pair.refreshToken, clientID: "isolated-refresh", resource: resource)
+        XCTAssertNotEqual(pair.refreshToken, rotated.refreshToken)
+        XCTAssertEqual(pair.access.evidence.authorizationEventID,
+                       rotated.access.evidence.authorizationEventID)
+
+        do {
+            _ = try await first.rotateRefresh(
+                token: rotated.refreshToken, clientID: "isolated-refresh",
+                resource: URL(string: "https://wrong-resource.example/mcp")!)
+            XCTFail("cross-resource rotation must refuse")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorizationDenied)
+        }
+        // A new issuer process on the same frozen file sees the correct head.
+        let restarted = try FountainAuthAuthorizationServer(
+            metadata: metadata, keyStore: keys,
+            stateStore: FountainAuthFileAuthorityStateStore(fileURL: path))
+        let third = try await restarted.rotateRefresh(
+            token: rotated.refreshToken, clientID: "isolated-refresh", resource: resource)
+        _ = try await restarted.validate(
+            third.access, resource: resource, requiredScope: "host.describe")
+        do {
+            _ = try await restarted.rotateRefresh(
+                token: pair.refreshToken, clientID: "isolated-refresh", resource: resource)
+            XCTFail("spent refresh replay must revoke its entire family")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorizationDenied)
+        }
+        let reader = try FountainAuthFileRevocationReader(fileURL: path)
+        let separateResource = try FountainAuthProtectedResourceValidator(
+            issuer: issuer, keyStore: keys,
+            isRevoked: { tokenID, eventID, exactIssuer, client, boundResource in
+                try reader.isRevoked(
+                    tokenID: tokenID, authorizationEventID: eventID,
+                    issuer: exactIssuer, clientID: client, resource: boundResource)
+            })
+        do {
+            _ = try await separateResource.validateBearer(
+                third.access.value, resource: resource, requiredScope: "host.describe")
+            XCTFail("old access must be denied at a distinct protected resource")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
+        }
+        do {
+            _ = try await restarted.rotateRefresh(
+                token: third.refreshToken, clientID: "isolated-refresh", resource: resource)
+            XCTFail("family remains revoked after replay")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorizationDenied)
+        }
+
+        let finalServer = try FountainAuthAuthorizationServer(
+            metadata: metadata, keyStore: keys,
+            stateStore: FountainAuthFileAuthorityStateStore(fileURL: path))
+        let secondCode = try await finalServer.begin(
+            request("new-consent"), subjectReference: "owner:isolated",
+            authenticationMechanism: "fixture-consent", decision: .approved)
+        let fresh = try await finalServer.redeemWithRefresh(
+            code: secondCode.value, clientID: "isolated-refresh",
+            redirectURI: redirect, verifier: verifier, resource: resource)
+        XCTAssertNotEqual(fresh.access.evidence.authorizationEventID,
+                          third.access.evidence.authorizationEventID)
+        _ = try await separateResource.validateBearer(
+            fresh.access.value, resource: resource, requiredScope: "host.describe")
+        let persisted = try String(contentsOf: path, encoding: .utf8)
+        XCTAssertFalse(persisted.contains(pair.refreshToken))
+        XCTAssertFalse(persisted.contains(rotated.refreshToken))
+        XCTAssertFalse(persisted.contains(third.refreshToken))
+        XCTAssertFalse(persisted.contains(fresh.refreshToken))
+        XCTAssertFalse(persisted.contains(pair.access.value))
+        XCTAssertTrue(persisted.contains("refreshFamilies"))
+    }
+
+    func testLegacyFrozenSnapshotImportPreservesRefreshAndRefusesSecondWriter() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-import-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("authority.json")
+        let issuer = URL(string: "https://auth.migration.example")!
+        let resource = URL(string: "https://mcp.migration.example/mcp")!
+        let redirect = URL(string: "http://legacy-isolated.localhost/callback")!
+        let metadata = try FountainAuthServerMetadata(
+            issuer: issuer,
+            authorizationEndpoint: issuer.appendingPathComponent("oauth/authorize"),
+            tokenEndpoint: issuer.appendingPathComponent("oauth/token"),
+            jwksURI: issuer.appendingPathComponent(".well-known/jwks.json"),
+            scopesSupported: ["host.describe"],
+            grantTypesSupported: ["authorization_code", "refresh_token"])
+        let keys = try FountainAuthMemoryKeyStore(keyID: "legacy-preserved-key")
+        let client = try FountainAuthClientRegistration(
+            clientID: "isolated-legacy", redirectURIs: [redirect])
+        let legacyRefresh = String(repeating: "A", count: 64)
+        let digest = SHA256.hash(data: Data(legacyRefresh.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        let family = FountainAuthRefreshFamily(
+            familyID: "legacy-family-1", clientID: client.clientID,
+            resource: resource, subjectReference: "owner:isolated",
+            grantedScope: ["host.describe"],
+            authorizedAt: Date().addingTimeInterval(-60),
+            expiresAt: Date().addingTimeInterval(7200),
+            authorizationEventID: "legacy-event-1",
+            authenticationMechanism: "fixture-basic-owner",
+            correlationID: "legacy-migration-test",
+            currentDigest: digest, consumedDigests: [])
+        let clientsJSON = try JSONEncoder().encode([client])
+        let familiesJSON = try JSONEncoder().encode([family])
+        let server = try FountainAuthAuthorizationServer(
+            metadata: metadata, keyStore: keys,
+            stateStore: FountainAuthFileAuthorityStateStore(fileURL: path))
+        let receipt = try await server.importLegacy(
+            clientsJSON: clientsJSON, refreshFamiliesJSON: familiesJSON,
+            permittedResource: resource)
+        XCTAssertEqual(receipt.clients, 1)
+        XCTAssertEqual(receipt.refreshFamilies, 1)
+        XCTAssertEqual(receipt.authorizationEvents, 1)
+        let snapshotBeforeDuplicate = try Data(contentsOf: path)
+        do {
+            _ = try await server.importLegacy(
+                clientsJSON: clientsJSON, refreshFamiliesJSON: familiesJSON,
+                permittedResource: resource)
+            XCTFail("second writer/import must refuse even identical legacy records")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorityStateConflict)
+        }
+        XCTAssertEqual(try Data(contentsOf: path), snapshotBeforeDuplicate)
+        XCTAssertEqual(try JSONEncoder().encode([family]), familiesJSON)
+
+        let restarted = try FountainAuthAuthorizationServer(
+            metadata: metadata, keyStore: keys,
+            stateStore: FountainAuthFileAuthorityStateStore(fileURL: path))
+        let rotated = try await restarted.rotateRefresh(
+            token: legacyRefresh, clientID: "isolated-legacy", resource: resource)
+        XCTAssertEqual(rotated.access.evidence.authorizationEventID, family.authorizationEventID)
+        let admitted = try await restarted.validate(
+            rotated.access, resource: resource, requiredScope: "host.describe")
+        XCTAssertEqual(admitted.clientID, client.clientID)
+
+        do {
+            _ = try await restarted.rotateRefresh(
+                token: legacyRefresh, clientID: "isolated-legacy", resource: resource)
+            XCTFail("replayed legacy token must revoke the imported family")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorizationDenied)
+        }
+        let finalServer = try FountainAuthAuthorizationServer(
+            metadata: metadata, keyStore: keys,
+            stateStore: FountainAuthFileAuthorityStateStore(fileURL: path))
+        do {
+            _ = try await finalServer.validate(
+                rotated.access, resource: resource, requiredScope: "host.describe")
+            XCTFail("revocation must be durable")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
+        }
+        let saved = try String(contentsOf: path, encoding: .utf8)
+        XCTAssertTrue(saved.contains(digest))
+        XCTAssertFalse(saved.contains(legacyRefresh))
+        XCTAssertFalse(saved.contains(rotated.refreshToken))
+    }
+
     func testLegacyAuthoritySnapshotDecodesWithoutIssuedEventIndex() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FountainAuthKit-legacy-" + UUID().uuidString)
