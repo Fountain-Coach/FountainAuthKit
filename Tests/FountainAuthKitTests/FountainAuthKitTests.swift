@@ -406,6 +406,93 @@ extension FountainAuthKitTests {
             scopesSupported: [FountainAuthHostDescribeAdmission.capability])
     }
 
+    func testFailedAuthorityStateWriteDoesNotChangeInMemoryAdmissionOrConsumeCode() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-durable-failure-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let authorityDirectory = root.appendingPathComponent("authority")
+        let parkedDirectory = root.appendingPathComponent("parked")
+        let stateURL = authorityDirectory.appendingPathComponent("state.json")
+        let issuer = URL(string: "https://auth.write-failure.example")!
+        let resource = URL(string: "https://mcp.write-failure.example/mcp")!
+        let redirect = URL(string: "http://writer.localhost/callback")!
+        let store = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let client = try FountainAuthClientRegistration(
+            clientID: "isolated-writer", redirectURIs: [redirect])
+
+        // An existing regular file prevents the authority directory from being
+        // created. Every failed mutation must remain absent from actor memory.
+        try Data("blocked".utf8).write(to: authorityDirectory)
+        do {
+            try await store.register(client: client, issuer: issuer)
+            XCTFail("client must not be admitted on failed durable write")
+        } catch {}
+        let missingClient = try await store.client(issuer: issuer, clientID: client.clientID)
+        XCTAssertNil(missingClient)
+        do {
+            try await store.revokeTokenID("unpersisted-revoke", issuer: issuer)
+            XCTFail("token revocation cannot succeed without persistence")
+        } catch {}
+        let unpersistedRevocation = try await store.isTokenRevoked("unpersisted-revoke", issuer: issuer)
+        XCTAssertFalse(unpersistedRevocation)
+        do {
+            try await store.admitIssuer(issuer)
+            XCTFail("issuer admission cannot succeed without persistence")
+        } catch {}
+        let unpersistedIssuers = try await store.admittedIssuers()
+        XCTAssertTrue(unpersistedIssuers.isEmpty)
+
+        try FileManager.default.removeItem(at: authorityDirectory)
+        try await store.register(client: client, issuer: issuer)
+        let persistedClient = try await store.client(issuer: issuer, clientID: client.clientID)
+        XCTAssertEqual(persistedClient, client)
+
+        let request = try FountainAuthAuthorizationRequest(
+            clientID: client.clientID, redirectURI: redirect, scope: ["host.describe"],
+            state: "write-failure-state",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(
+                verifier: String(repeating: "x", count: 48)),
+            resource: resource, correlationID: "write-failure-correlation",
+            expiresAt: Date().addingTimeInterval(120))
+        let record = FountainAuthStoredAuthorizationCode(
+            request: request, subjectReference: "test-operator",
+            authenticationMechanism: "isolated-test", approvedAt: Date(),
+            authorizationEventID: "write-failure-event",
+            expiresAt: Date().addingTimeInterval(120))
+        try await store.storeAuthorizationCode(record, issuer: issuer, codeDigest: "saved-code")
+
+        // Move the existing durable state aside without editing its contents.
+        // A second blocked write must neither consume a code nor admit a new one.
+        try FileManager.default.moveItem(at: authorityDirectory, to: parkedDirectory)
+        try Data("blocked".utf8).write(to: authorityDirectory)
+        do {
+            _ = try await store.consumeAuthorizationCode(issuer: issuer, codeDigest: "saved-code")
+            XCTFail("failed consumption must keep the code redeemable")
+        } catch {}
+        do {
+            try await store.storeAuthorizationCode(record, issuer: issuer, codeDigest: "new-code")
+            XCTFail("failed issuance must not be visible to runtime")
+        } catch {}
+        try FileManager.default.removeItem(at: authorityDirectory)
+        try FileManager.default.moveItem(at: parkedDirectory, to: authorityDirectory)
+
+        let absentCode = try await store.consumeAuthorizationCode(
+            issuer: issuer, codeDigest: "new-code")
+        XCTAssertNil(absentCode)
+        let originalCode = try await store.consumeAuthorizationCode(
+            issuer: issuer, codeDigest: "saved-code")
+        XCTAssertEqual(originalCode, record)
+        let reopened = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let replay = try await reopened.consumeAuthorizationCode(
+            issuer: issuer, codeDigest: "saved-code")
+        XCTAssertNil(replay)
+        let reopenedRevocation = try await reopened.isTokenRevoked("unpersisted-revoke", issuer: issuer)
+        let reopenedIssuers = try await reopened.admittedIssuers()
+        XCTAssertFalse(reopenedRevocation)
+        XCTAssertTrue(reopenedIssuers.isEmpty)
+    }
+
     func testDurableAuthorityStateSurvivesRestartWithoutPersistingBearers() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FountainAuthKit-" + UUID().uuidString, isDirectory: true)

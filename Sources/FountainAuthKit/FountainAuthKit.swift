@@ -974,8 +974,10 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
 
     public func register(client: FountainAuthClientRegistration, issuer: URL) async throws {
         let key = try canonicalIssuerString(issuer)
-        snapshot.clients[key, default: [:]][client.clientID] = client
-        try persist()
+        var next = snapshot
+        next.clients[key, default: [:]][client.clientID] = client
+        try persist(next)
+        snapshot = next
     }
 
     public func client(issuer: URL, clientID: String) async throws -> FountainAuthClientRegistration? {
@@ -989,22 +991,28 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
         guard snapshot.authorizationCodes[key]?[codeDigest] == nil else {
             throw FountainAuthError.authorityStateConflict
         }
-        snapshot.authorizationCodes[key, default: [:]][codeDigest] = record
-        try persist()
+        var next = snapshot
+        next.authorizationCodes[key, default: [:]][codeDigest] = record
+        try persist(next)
+        snapshot = next
     }
 
     public func consumeAuthorizationCode(issuer: URL,
                                          codeDigest: String) async throws -> FountainAuthStoredAuthorizationCode? {
         let key = try canonicalIssuerString(issuer)
-        guard let record = snapshot.authorizationCodes[key]?.removeValue(forKey: codeDigest) else { return nil }
-        try persist()
+        var next = snapshot
+        guard let record = next.authorizationCodes[key]?.removeValue(forKey: codeDigest) else { return nil }
+        try persist(next)
+        snapshot = next
         return record
     }
 
     public func revokeTokenID(_ tokenID: String, issuer: URL) async throws {
         let key = try canonicalIssuerString(issuer)
-        snapshot.revokedTokenIDs[key, default: []].insert(tokenID)
-        try persist()
+        var next = snapshot
+        next.revokedTokenIDs[key, default: []].insert(tokenID)
+        try persist(next)
+        snapshot = next
     }
 
     public func isTokenRevoked(_ tokenID: String, issuer: URL) async throws -> Bool {
@@ -1077,15 +1085,15 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
     }
 
     public func admitIssuer(_ issuer: URL) async throws {
-        snapshot.admittedIssuerStrings.insert(try canonicalIssuerString(issuer))
-        try persist()
+        var next = snapshot
+        next.admittedIssuerStrings.insert(try canonicalIssuerString(issuer))
+        try persist(next)
+        snapshot = next
     }
 
     public func admittedIssuers() async throws -> [URL] {
         snapshot.admittedIssuerStrings.sorted().compactMap(URL.init(string:))
     }
-
-    private func persist() throws { try persist(snapshot) }
 
     private func persist(_ next: FountainAuthAuthorityStateSnapshot) throws {
         let directory = fileURL.deletingLastPathComponent()

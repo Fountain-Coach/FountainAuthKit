@@ -1,5 +1,15 @@
 # Plan and history-first reconstruction
 
+## Slice F1 — Atomic authority mutation after failed persistence (8 November 2026)
+
+**Chapters read:** 07 history-first goal fidelity and phase plan; 08 independently witnessed persisted proof; 73 scenario and negative-path terminal predicates; 91 FCIS-KIT owns authorization-state invariants; 93 build/evidence before release. Published Chapters 142 (one Kit authorization owner) and 161 (owner-visible revoke must match enforced state) remain binding. **Forbidden:** an issuer accepting mutations not committed durably, treating 27/27 as release admission, creating another permission store, altering the deployed ChatGPT refresh grant or choosing a new signing key. **Conflict:** the earlier file-backed state methods mutated their in-memory snapshot before a fallible atomic disk write; new event/refresh methods had correctly used copy-on-write. **Excluded:** Host deployment, real grant mutation, independent Store receipt, Press UX and release authority until native witness is complete.
+
+**Observed defect:** `FountainAuthFileAuthorityStateStore` registration, authorization-code storage/consumption, token-ID revocation and issuer admission used `snapshot` mutation followed by `persist()`. A denied write could leave an unpersisted client, accepted revocation, consumed code or issuer in memory, in conflict with the next restart and protected resource. **Smallest correction:** stage a local `next` snapshot; persist it first; publish to actor memory only upon successful write. Reuse the existing actor and JSON snapshot without adding any new authority.
+
+**Terminal proof:** `testFailedAuthorityStateWriteDoesNotChangeInMemoryAdmissionOrConsumeCode` uses a real file-path obstruction to force native filesystem failures, then verifies no unpersisted registration, token revocation, issuer admission, authorization-code creation or code consumption; restoring the existing snapshot permits the original code exactly once, with restart agreement. Focused Ubuntu Swift 6.3.3 test PASSED (1/1). Full Ubuntu Swift 6.3.3 `swift test --jobs 3` PASSED **28/28**, zero failures, on the isolated Mac mini checkout. Kit `.swiftmodule` SHA-256 `771a4217efab3a1e83bc31077af70e51a4e72060d86fddfe8b2d3f098b8b8510`; XCTest executable SHA-256 `8b035621003a832c4d2e9f0007ae6fd9259249e6030753461df06bed796ea8d4`. GitHub CI and owning review/release remain separate gates. No Host or Caddy changes.
+
+
+
 ## Source boundary
 
 Problem/source: promotion of the existing in-repository `midi2-gpu-fabric/kits/FountainAuthKit` seam into its own public owned-kit repository.
