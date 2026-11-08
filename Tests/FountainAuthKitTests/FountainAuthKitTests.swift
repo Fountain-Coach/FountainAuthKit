@@ -971,6 +971,33 @@ extension FountainAuthKitTests {
                           third.access.evidence.authorizationEventID)
         _ = try await separateResource.validateBearer(
             fresh.access.value, resource: resource, requiredScope: "host.describe")
+        let ownerRevoke = try await finalServer.revokeAuthorizationEvent(
+            fresh.access.evidence.authorizationEventID,
+            clientID: "isolated-refresh", resource: resource)
+        XCTAssertEqual(ownerRevoke, .revoked)
+        do {
+            _ = try await finalServer.rotateRefresh(
+                token: fresh.refreshToken, clientID: "isolated-refresh", resource: resource)
+            XCTFail("owner-revoked event must also deny its refresh family")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .authorizationDenied)
+        }
+        do {
+            _ = try await separateResource.validateBearer(
+                fresh.access.value, resource: resource, requiredScope: "host.describe")
+            XCTFail("owner-revoked event must deny its signed access token")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
+        }
+        let stateJSON = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+        let familyByIssuer = try XCTUnwrap(stateJSON["refreshFamilies"] as? [String: Any])
+        let issuerFamilies = try XCTUnwrap(
+            familyByIssuer["https://auth.refresh.example"] as? [String: [String: Any]])
+        XCTAssertTrue(issuerFamilies.values.contains(where: {
+            $0["authorizationEventID"] as? String == fresh.access.evidence.authorizationEventID &&
+            $0["revoked"] as? Bool == true
+        }), "the effective revocation must be reflected in the owner grant record")
         let persisted = try String(contentsOf: path, encoding: .utf8)
         XCTAssertFalse(persisted.contains(pair.refreshToken))
         XCTAssertFalse(persisted.contains(rotated.refreshToken))
