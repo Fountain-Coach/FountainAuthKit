@@ -649,6 +649,103 @@ extension FountainAuthKitTests {
         XCTAssertTrue(file.contains(firstCode.evidence.authorizationEventID))
     }
 
+    func testProtectedResourceValidatorReadsLiveRevocationAcrossRestartAndFailsClosed() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-resource-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let stateURL = directory.appendingPathComponent("authority-state.json")
+        let issuer = URL(string: "https://auth.resource.example")!
+        let resource = URL(string: "https://mcp.resource.example/mcp")!
+        let redirect = URL(string: "http://isolated-resource.localhost/callback")!
+        let clientID = "isolated-resource-client"
+        let keys = try FountainAuthMemoryKeyStore(keyID: "isolated-public-verification")
+        let state = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let server = try FountainAuthAuthorizationServer(
+            metadata: durableMetadata(issuer: issuer),
+            keyStore: keys, stateStore: state, tokenLifetime: 120)
+        try await server.register(FountainAuthClientRegistration(
+            clientID: clientID, redirectURIs: [redirect]))
+        let verifier = "protected-resource-verifier-123456789012345678901234"
+        let request = try FountainAuthAuthorizationRequest(
+            clientID: clientID, redirectURI: redirect,
+            scope: [FountainAuthHostDescribeAdmission.capability],
+            state: "isolated-resource-consent",
+            codeChallenge: FountainAuthAuthorizationRequest.s256Challenge(verifier: verifier),
+            resource: resource, correlationID: "resource-revoke-fixture",
+            expiresAt: Date().addingTimeInterval(120))
+        let code = try await server.begin(
+            request, subjectReference: "owner:isolated",
+            authenticationMechanism: "fixture-consent", decision: .approved)
+        let access = try await server.redeem(
+            code: code.value, clientID: clientID, redirectURI: redirect,
+            verifier: verifier, resource: resource)
+        let publicResourceValidator = try FountainAuthProtectedResourceValidator(
+            issuer: issuer, keyStore: keys,
+            isRevoked: { tokenID, eventID, exactIssuer in
+                if try await state.isTokenRevoked(tokenID, issuer: exactIssuer) {
+                    return true
+                }
+                return try await state.isAuthorizationEventRevoked(
+                    eventID, issuer: exactIssuer)
+            })
+        let admitted = try await publicResourceValidator.validateBearer(
+            access.value, resource: resource,
+            requiredScope: FountainAuthHostDescribeAdmission.capability)
+        XCTAssertEqual(admitted.clientID, clientID)
+        XCTAssertEqual(admitted.authorizationEventID, code.evidence.authorizationEventID)
+
+        let outcome = try await server.revokeAuthorizationEvent(
+            code.evidence.authorizationEventID, clientID: clientID, resource: resource)
+        XCTAssertEqual(outcome, .revoked)
+        do {
+            _ = try await publicResourceValidator.validateBearer(
+                access.value, resource: resource,
+                requiredScope: FountainAuthHostDescribeAdmission.capability)
+            XCTFail("independent resource must reject a revoked authorization")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
+        }
+
+        let reopened = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
+        let validatorAfterRestart = try FountainAuthProtectedResourceValidator(
+            issuer: issuer, keyStore: keys,
+            isRevoked: { tokenID, eventID, exactIssuer in
+                if try await reopened.isTokenRevoked(tokenID, issuer: exactIssuer) {
+                    return true
+                }
+                return try await reopened.isAuthorizationEventRevoked(
+                    eventID, issuer: exactIssuer)
+            })
+        do {
+            _ = try await validatorAfterRestart.validateBearer(
+                access.value, resource: resource,
+                requiredScope: FountainAuthHostDescribeAdmission.capability)
+            XCTFail("resource must still deny after durable state reload")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
+        }
+        enum RevocationReaderDown: Error { case offline }
+        let unavailable = try FountainAuthProtectedResourceValidator(
+            issuer: issuer, keyStore: keys,
+            isRevoked: { _, _, _ in throw RevocationReaderDown.offline })
+        do {
+            _ = try await unavailable.validateBearer(
+                access.value, resource: resource,
+                requiredScope: FountainAuthHostDescribeAdmission.capability)
+            XCTFail("missing current revocation state must fail closed")
+        } catch {
+            XCTAssertTrue(error is RevocationReaderDown)
+        }
+        do {
+            _ = try await validatorAfterRestart.validateBearer(
+                access.value, resource: URL(string: "https://wrong-resource.example/mcp")!,
+                requiredScope: FountainAuthHostDescribeAdmission.capability)
+            XCTFail("cross-resource token must fail closed")
+        } catch {
+            XCTAssertEqual(error as? FountainAuthError, .invalidToken)
+        }
+    }
+
     func testLegacyAuthoritySnapshotDecodesWithoutIssuedEventIndex() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("FountainAuthKit-legacy-" + UUID().uuidString)
