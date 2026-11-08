@@ -1023,7 +1023,9 @@ extension FountainAuthKitTests {
             XCTAssertEqual(error as? FountainAuthError, .authorityStateConflict)
         }
         XCTAssertEqual(try Data(contentsOf: path), snapshotBeforeDuplicate)
-        XCTAssertEqual(try JSONEncoder().encode([family]), familiesJSON)
+        let preservedFamilies = try JSONDecoder().decode(
+            [FountainAuthRefreshFamily].self, from: familiesJSON)
+        XCTAssertEqual(preservedFamilies, [family])
 
         let restarted = try FountainAuthAuthorizationServer(
             metadata: metadata, keyStore: keys,
