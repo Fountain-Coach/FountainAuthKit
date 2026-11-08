@@ -4,7 +4,7 @@ instrument: fountaincoach.authorization@0.1.0
 targetKind: system-boundary
 owner: FountainAuthKit
 consumer: Hetzner Fountain Host MCP issuer + protected resource, then Fountain Press
-state: specified-not-implemented
+state: fixture-tested-candidate-not-live
 claimBoundary: isolated migration contract only; no existing ChatGPT refresh family was read, rotated, revoked, imported or modified
 preconditions:
   - isolated fixture reproduces deployed legacy clients.json and refresh-families.json representations with safe synthetic digests, not actual owner credentials
