@@ -895,6 +895,47 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
     }
 }
 
+/// Reads the *current* issuer-owned authority snapshot for each protected
+/// resource decision. It never creates state, writes it, or caches an allow.
+/// The issuer remains the sole mutation authority for this same-host file.
+/// Unavailable, corrupt, unprotected or mismatched state is a refusal.
+public struct FountainAuthFileRevocationReader: Sendable {
+    public let fileURL: URL
+
+    public init(fileURL: URL) throws {
+        guard fileURL.isFileURL, fileURL.path.hasPrefix("/") else {
+            throw FountainAuthError.invalidRequest
+        }
+        self.fileURL = fileURL
+    }
+
+    public func isRevoked(tokenID: String, authorizationEventID: String,
+                          issuer: URL, clientID: String, resource: URL) throws -> Bool {
+        let issuerKey = try canonicalIssuerString(issuer)
+        guard !tokenID.isEmpty, !authorizationEventID.isEmpty, !clientID.isEmpty,
+              resource.scheme?.lowercased() == "https",
+              resource.host?.isEmpty == false else {
+            throw FountainAuthError.authorizationDenied
+        }
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        guard attributes[.type] as? FileAttributeType == .typeRegular,
+              let permissions = attributes[.posixPermissions] as? NSNumber,
+              permissions.intValue & 0o077 == 0 else {
+            throw FountainAuthError.authorizationDenied
+        }
+        // Data(contentsOf:) is deliberate: a prior successful read is never
+        // reused after the issuer atomically writes a new revocation.
+        let state = try JSONDecoder().decode(
+            FountainAuthAuthorityStateSnapshot.self,
+            from: Data(contentsOf: fileURL))
+        guard let event = state.issuedAuthorizationEvents[issuerKey]?[authorizationEventID],
+              event.clientID == clientID, event.resource == resource else {
+            throw FountainAuthError.authorizationDenied
+        }
+        return event.revoked || state.revokedTokenIDs[issuerKey]?.contains(tokenID) == true
+    }
+}
+
 private func authorizationCodeDigest(_ value: String) -> String {
     Data(SHA256.hash(data: Data(value.utf8))).map { String(format: "%02x", $0) }.joined()
 }
@@ -1139,7 +1180,8 @@ public actor FountainAuthAuthorizationServer {
 /// Neither this adapter nor its closure may authorize or revoke a grant.
 public struct FountainAuthProtectedResourceValidator: Sendable {
     public typealias RevocationCheck = @Sendable (
-        _ tokenID: String, _ authorizationEventID: String, _ issuer: URL
+        _ tokenID: String, _ authorizationEventID: String, _ issuer: URL,
+        _ clientID: String, _ resource: URL
     ) async throws -> Bool
 
     public let issuer: URL
@@ -1196,7 +1238,7 @@ public struct FountainAuthProtectedResourceValidator: Sendable {
 
         // A static startup list or an unchecked cached "not revoked" decision
         // is not acceptable: the owning reader must establish CURRENT state.
-        guard try await !isRevoked(tokenID, eventID, issuer) else {
+        guard try await !isRevoked(tokenID, eventID, issuer, clientID, resource) else {
             throw FountainAuthError.tokenRevoked
         }
         let scopes = scopeText.split(separator: " ").map(String.init)
