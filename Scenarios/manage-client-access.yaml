@@ -1,0 +1,55 @@
+id: fcis-manage-client-access
+version: 0.1.0
+instrument: fountaincoach.authorization@0.1.0
+targetKind: system-boundary
+owner: FountainAuthKit
+consumer: Fountain Press access instrument
+operationTopics:
+  - fountaincoach/authorization.begin
+  - fountaincoach/authorization.revoke
+  - fountaincoach/authorization.revoke.result
+claimBoundary: isolated Swift kit scenario only; no live ChatGPT revoke, FountainStore receipt, Fountain Press interaction, AX, production issuer, or public release claim
+preconditions:
+  - fixture owner authentication has explicitly approved one isolated public test client, not the live ChatGPT registration
+  - one issuer, one protected resource, one host.describe scope and exact PKCE S256 redirect are bound
+  - file-backed FountainAuthAuthorityStateStore and a safe grant-evidence ledger are available
+  - the original production ChatGPT client and Hetzner OAuth state remain unchanged
+actions:
+  - id: grant
+    intent: Approve consent, redeem a one-time code and validate host.describe for the isolated client
+    expected: authorized
+  - id: revoke
+    intent: Owner requests authorization.revoke by the recorded authorizationEventId, without supplying a bearer token
+    expected: revoked
+  - id: deny
+    intent: Validate the previously issued access token for the same resource and scope
+    expected: tokenRevoked
+  - id: restart
+    intent: Reconstruct the issuer and durable state without changing the signing key; validate old token again
+    expected: tokenRevoked
+  - id: replay
+    intent: Repeat the same revoke event and request an unknown or wrong-issuer event
+    expected: already-revoked for same event; refused for unknown or wrong issuer
+  - id: reauthorize
+    intent: Use a new explicit consent/PKCE authorization event; validate its new token
+    expected: authorized
+terminalPredicates:
+  - the first authorized host.describe validation succeeds for exactly the isolated client and resource
+  - the first owner revocation returns revoked and the same access token is rejected immediately
+  - token denial survives reopening the file-backed authority state
+  - a duplicate revocation returns already-revoked with no second mutation; unknown and wrong-issuer events refuse
+  - new consent creates a distinct authorizationEventId and restores only the new grant
+  - persisted revocation state and scenario receipts contain no bearer, refresh token, client password, signing key or authorization code
+  - no production client, public Caddy route, Host admission or Fountain Press publication is modified
+refusalAndRecovery:
+  - anonymous or unauthenticated mutation is rejected at the host adapter before reaching this kit
+  - missing issuance evidence, unknown event, wrong issuer or incomplete state fails closed
+  - restart and duplicate event cannot resurrect an invalidated access token
+  - denial/error does not silently fall back to a different authorization authority
+witnesses:
+  kit: Swift XCTest with file-backed authorization state, safe evidence ledger and exact issuer/client/resource predicates
+  midi2: typed revoke and revoke.result contract exists in schema/idl.yaml; external peer exchange not yet witnessed
+  store: file-backed test snapshot only; live FountainStore acceptance not yet established
+  press: consumer AX + rendered browser evidence required after released kit integration, not satisfied by a static preview
+  security: independent live security review not established
+state: specified
