@@ -1196,6 +1196,12 @@ public actor FountainAuthAuthorizationServer {
         self.refreshLifetime = refreshLifetime
     }
 
+    /// Public verification material for the issuer's existing JWKS endpoint.
+    /// Does not expose or rotate the active signing private key.
+    public func verificationKeys(now: Date = Date()) async throws -> [String: Data] {
+        try await keyStore.verificationKeys(now: now)
+    }
+
     public func register(_ client: FountainAuthClientRegistration) async throws {
         try await stateStore.register(client: client, issuer: metadata.issuer)
     }
