@@ -13,12 +13,12 @@ This section is additive and does not revise the separate 7 October v0.1.0 accep
 | Durable state changes only after atomic persistence succeeds | PASS (fixture) | Native filesystem write-failure regression |
 | Owner grant overview from current issuer snapshot, without refresh/bearer disclosure | PASS (fixture) | `FountainAuthFileOwnerAccessReader` active/revoked, issuer separation, 0600 refusal |
 | Public issuer JWKS verification-key API and validated-grant compatibility | PASS (source) | Existing Host consuming tests |
-| Downstream Host source and test compatibility | PASS (isolated) | Host PR #105 merged-source tree `f390639c1d3413268b2abad218ff89c98fb8509c`, 30/30 focused native tests and two executable builds |
+| Downstream Host source and test compatibility | PASS (isolated) | Host PR #105 candidate `a2fea4898fb3b7d94ca1ec4c04c9c59a838238dd`: 30/30 combined native tests plus OAuth HTTP DCR/PKCE/refresh and intercepted-browser callback on 3 viewports; no real iPad acceptance |
 | Real issuer currently on Hetzner | NOT ADMITTED | Still executes older Kit; signing identity and three clients / one refresh family not migrated |
 | Real isolated client revoke, independent MCP denial and FountainStore witness | NOT CLAIMED | Synthetic Host + Store tests do not establish live enforcement |
 | Current Caddy, systemd and signed release target reconciliation | BLOCKED | Live units have candidate suffix; existing native release class names other units and root |
-| Fountain Press working owner leaf and native iPad acceptance | NOT CLAIMED | Press consumer PR #8 remains a scenario candidate |
-| Independent review / release authorization | PENDING | PR #1 is review-ready; no approved reviewer or semantic version promotion |
+| Fountain Press working owner leaf and native iPad acceptance | PASS (isolated local client); live NOT CLAIMED | Press PR #8 `f493ca3bbb46d4e4ff5279825f3ad11f70cd4865`: 11/11 client tests and 3 synthetic browser viewports; native iPad, live Store/MCP denied grant and published route remain unaccepted |
+| Independent review / release authorization | PENDING | PR #1 ready and green; no independent review or authorized release. Repository has only the implementing GitHub collaborator `Contexter` listed and no eligible team reviewer surfaced as of 8 November; do not self-approve |
 
 **Release gate:** do not tag, merge as a released package, switch the production Host, import live credentials, mutate the live issuer, or publicly advertise the owner instrument while the rows above remain unaccepted. The existing live ChatGPT refresh family remains unaffected. The source is reviewable; promotion is a separate authority decision.
 

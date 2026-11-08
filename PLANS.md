@@ -1,5 +1,28 @@
 # Plan and history-first reconstruction
 
+## Current release-admission tranche — 8 November 2026 (canonical, not an alternative tracker)
+
+**Target:** advance existing `fountaincoach.authorization@0.1.0` Manage Client Access candidate PR #1 `a9940287a49eb10283c2a1f03aeb83321228026e` to a reviewed, semver-tagged Kit release consumable by Host PR #105; then prove unchanged existing ChatGPT grants through a single-writer Hetzner migration. Native iPad reconnection and Press owner revoke remain final live acceptance, not assumptions.
+
+**Chapters read:** 07 history-first and one maintained plan; 08 evidence authority and independent release witnesses; 90 security review separate from source/test proof; 91 one FCIS-KIT capability owner; 93 scenario → test → evidence → independent admission → released reproducible artifact.
+**What they forbid here:** self-approving an authentication security release; declaring the current green 30/30 suite to be independent review; tagging or activating with an open security/Store/live-service acceptance gate; creating an owner key, second client database, alternate deployment helper or ZIP distribution.
+**Conflicts:** writer requests autonomous completion, while Chapter 90/93 and root AGENTS require a separate admission authority. Continue automated read-only checks and all dependency-ready implementation, but do not pretend the implementing agent constitutes an independent reviewer.
+**Excluded, and why:** Reframe GUI/Audio/MIDI work, additional owner portal, public documentation and unrelated host services are outside the bounded access grant continuity scenario.
+
+**Checked state:** PR #1 OPEN, clean/mergeable, GitHub Actions `test` SUCCESS and 0 reviews. Existing `v0.1.0` semantic release of 7 October is the predecessor, **not** this candidate. `Scenario/evidence/acceptance-report.md` explicitly records this slice as locally tested only. Suite of 30 Ubuntu Swift tests includes one-shot frozen import, rotating refresh, replay-triggered family revocation, owner overview, durable write-failure rollback, and no secret-bearing output. The candidate has no independent security approval or tagged release.
+
+| Phase | Native next action | Admission / terminal predicate | Status |
+| --- | --- | --- | --- |
+| K1 | Confirm exact PR source, CI, `GOAL.md`, `AUTHORITY.md`, scenario JSON/Swift and secret-shape scan | Clean source, named revision, tests and checked projection agree | Source tested; revalidate after any change |
+| K2 | Obtain independent review of authorization/security change and migration/rollback scope | Non-author review recorded; findings closed or explicitly accepted by owner | **PENDING, cannot self-approve** |
+| K3 | Admit semver release on owning repository with signed/versioned tag, changelog and exact source SHA/digests | Named reproducible released Kit, acceptance report promoted by owning authority | BLOCKED on K2 |
+| K4 | Pin Host consumer to the admitted Kit release instead of its candidate commit | Native Host OAuth/MCP/Store/refresh tests and binary hashes match pinned version | BLOCKED on K3 |
+| K5 | Prove Hetzner freeze, one issuer writer, private signing identity unchanged, reversible predecessor and old ChatGPT refresh continuity | Exact native service/Store/HTTPS receipts and independent real-client denial | Requires Host target release readiness |
+| K6 | Confirm installed ChatGPT iPad reconnect, refresh and `host.describe`, then Press real grant revoke | Physical iPad + independent MCP/Store witnesses | Not executed |
+
+**Stop boundary:** no production registry mutations, signing key change, live issuer restart, Caddy activation, tag or GitHub release from this plan. Continue release preflight and review preparation without requiring the writer to babysit every step.
+
+
 ## Slice F2 — Owner read projection from the same authority (8 November 2026)
 
 **Goal:** Fountain Press must select an actual client/grant without owning permission state. **Authority:** Chapter 142 and 161 require one Kit issuer and an owner-authenticated Host; the scenario from `Scenarios/manage-client-access.yaml` requires source-verified grant identity. **Forbidden:** querying legacy registry as an alternate authority, returning raw refresh digests or tokens, showing a cached revocation as current, exposing this reader to public callers, or asserting Host/UI acceptance from a Kit fixture. **Boundary:** `FountainAuthFileOwnerAccessReader` is Kit-owned and read-only; its Host adapter must authenticate the owner, match issuer and use this source on every request. No deployment or grant change in this slice.
