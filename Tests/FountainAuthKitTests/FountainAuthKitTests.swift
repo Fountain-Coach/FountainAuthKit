@@ -679,14 +679,13 @@ extension FountainAuthKitTests {
         let access = try await server.redeem(
             code: code.value, clientID: clientID, redirectURI: redirect,
             verifier: verifier, resource: resource)
+        let liveReader = try FountainAuthFileRevocationReader(fileURL: stateURL)
         let publicResourceValidator = try FountainAuthProtectedResourceValidator(
             issuer: issuer, keyStore: keys,
-            isRevoked: { tokenID, eventID, exactIssuer, _, _ in
-                if try await state.isTokenRevoked(tokenID, issuer: exactIssuer) {
-                    return true
-                }
-                return try await state.isAuthorizationEventRevoked(
-                    eventID, issuer: exactIssuer)
+            isRevoked: { tokenID, eventID, exactIssuer, exactClient, exactResource in
+                try liveReader.isRevoked(
+                    tokenID: tokenID, authorizationEventID: eventID,
+                    issuer: exactIssuer, clientID: exactClient, resource: exactResource)
             })
         let admitted = try await publicResourceValidator.validateBearer(
             access.value, resource: resource,
@@ -706,15 +705,12 @@ extension FountainAuthKitTests {
             XCTAssertEqual(error as? FountainAuthError, .tokenRevoked)
         }
 
-        let reopened = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
         let validatorAfterRestart = try FountainAuthProtectedResourceValidator(
             issuer: issuer, keyStore: keys,
-            isRevoked: { tokenID, eventID, exactIssuer, _, _ in
-                if try await reopened.isTokenRevoked(tokenID, issuer: exactIssuer) {
-                    return true
-                }
-                return try await reopened.isAuthorizationEventRevoked(
-                    eventID, issuer: exactIssuer)
+            isRevoked: { tokenID, eventID, exactIssuer, exactClient, exactResource in
+                try FountainAuthFileRevocationReader(fileURL: stateURL).isRevoked(
+                    tokenID: tokenID, authorizationEventID: eventID,
+                    issuer: exactIssuer, clientID: exactClient, resource: exactResource)
             })
         do {
             _ = try await validatorAfterRestart.validateBearer(
