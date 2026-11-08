@@ -16,6 +16,16 @@ Established proof: metadata, exact redirect, PKCE S256, single-use code, resourc
 Missing release seam: restart-safe persistence for authority state and full external protected-resource/host integration.
 Classification: source/history and local tests are observed; public production behavior is unestablished.
 
+## Slice F — Manage Client Access (scenario-first candidate, 2026-11-08)
+
+**Controlling goal:** A working revoke/reauthorize operation for an isolated test client, eventually consumed by Fountain Press as an FCIS instrument; not another management dashboard or authorization authority. Existing `fountaincoach.authorization@0.1.0` and the already declared `fountaincoach/authorization.revoke` MIDI2 operation are reused, without modifying the IDL.
+
+**Chapters read:** 07 planning/goal fidelity, 08 independent evidence, 91 kit ownership, 93 scenario→contract→implementation→evidence→admission/release, 73 scenario ownership. Published 142 keeps authorization in FountainAuthKit and host execution in the Host, while Chapter 161 requires explicit consent and revocation. **Forbidden:** rotating owner keys, altering production ChatGPT grants, treating an unadmitted read-only dashboard as management, equating fixture tests with live issuer enforcement. **Conflict:** existing standalone kit already durably revokes individual token IDs; the running MCP issuer and protected resource are separate consumers, so kit-local success does not prove production rejection. **Excluded:** production issuer/Caddy mutations, owner portal, Fountain Press consumer integration, new instrument namespace, live FountainStore/AX receipts until source-level scenario proof passes.
+
+**History-first sources:** `Sources/FountainAuthKit/FountainAuthKit.swift` owns the issuer-scoped `FountainAuthAuthorityStateStore` and `FountainAuthAuthorizationServer`; durable token ID revocation is already implemented and tested in `testDurableAuthorityStateSurvivesRestartWithoutPersistingBearers`. The missing evidence-backed seam is an owner-mediated revoke by a known authorization event ID, affecting all access tokens issued from that event while preserving reauthorization as a fresh event. No second database is needed; extend the existing authority state and retain backward JSON compatibility.
+
+**Scenario:** `Scenarios/manage-client-access.yaml` with checked `.json` projection. Precondition: unique isolated client, exact issuer/resource, PKCE consent and file-backed state. Terminal: success before revocation; `revoked` first, `already-revoked` repeated; old access denied immediately and after restart; unknown/wrong issuer/client/resource refused; fresh consent obtains a distinct event and succeeds; persisted state excludes all bearer material. Evidence to pursue: focused Swift XCTest and full package CI first, then independent Host/Store and Fountain Press browser/AX evidence. **Status: specified; not yet accepted, released or deployed.**
+
 ## Current promotion slices
 
 ### Slice A — public repository baseline
