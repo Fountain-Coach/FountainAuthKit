@@ -741,6 +741,16 @@ private struct FountainAuthAuthorityStateSnapshot: Codable, Sendable {
         var revoked = event
         revoked.revoked = true
         issuedAuthorizationEvents[key]?[authorizationEventID] = revoked
+        // One durable issuer transition must also update the refresh-family
+        // projection consumed by owner-facing management. Denial and
+        // displayed state must never disagree.
+        if let family = refreshFamilies[key]?.values.first(where: {
+            $0.authorizationEventID == authorizationEventID
+        }) {
+            var closed = family
+            closed.revoked = true
+            refreshFamilies[key]?[family.familyID] = closed
+        }
         return .revoked
     }
 
