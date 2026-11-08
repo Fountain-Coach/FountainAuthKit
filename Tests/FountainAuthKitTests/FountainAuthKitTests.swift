@@ -857,6 +857,15 @@ extension FountainAuthKitTests {
         family["consumedDigests"] = [olderDigest]
         family["revoked"] = true
         XCTAssertEqual(try inspect(family).revokedFamilies, 1)
+        var duplicateEvent = family
+        duplicateEvent["familyID"] = "isolated-legacy-family-2"
+        duplicateEvent["currentDigest"] = String(repeating: "c", count: 64)
+        duplicateEvent["consumedDigests"] = []
+        XCTAssertThrowsError(try FountainAuthLegacyRefreshPreflight.inspect(
+            clientsJSON: clientBytes,
+            refreshFamiliesJSON: JSONSerialization.data(
+                withJSONObject: [family, duplicateEvent]),
+            permittedResource: resource))
     }
 
     func testRefreshRotationReplayRevokesAccessAndNewConsentRestoresIt() async throws {
