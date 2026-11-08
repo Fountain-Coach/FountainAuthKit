@@ -618,6 +618,27 @@ public struct FountainAuthStoredAuthorizationCode: Codable, Equatable, Sendable 
     }
 }
 
+/// Non-secret issuer-scoped issuance binding, never a bearer token.
+public struct FountainAuthIssuedAuthorizationEvent: Codable, Equatable, Sendable {
+    public let authorizationEventID: String
+    public let clientID: String
+    public let resource: URL
+    public var revoked: Bool
+
+    public init(authorizationEventID: String, clientID: String,
+                resource: URL, revoked: Bool = false) {
+        self.authorizationEventID = authorizationEventID
+        self.clientID = clientID
+        self.resource = resource
+        self.revoked = revoked
+    }
+}
+
+public enum FountainAuthAuthorizationRevokeOutcome: String, Codable, Equatable, Sendable {
+    case revoked
+    case alreadyRevoked = "already-revoked"
+}
+
 public protocol FountainAuthAuthorityStateStore: Sendable {
     func register(client: FountainAuthClientRegistration, issuer: URL) async throws
     func client(issuer: URL, clientID: String) async throws -> FountainAuthClientRegistration?
@@ -628,6 +649,13 @@ public protocol FountainAuthAuthorityStateStore: Sendable {
                                   codeDigest: String) async throws -> FountainAuthStoredAuthorizationCode?
     func revokeTokenID(_ tokenID: String, issuer: URL) async throws
     func isTokenRevoked(_ tokenID: String, issuer: URL) async throws -> Bool
+    func recordIssuedAuthorizationEvent(_ event: FountainAuthIssuedAuthorizationEvent,
+                                        issuer: URL) async throws
+    func revokeAuthorizationEvent(_ authorizationEventID: String, issuer: URL,
+                                  clientID: String, resource: URL) async throws
+        -> FountainAuthAuthorizationRevokeOutcome
+    func isAuthorizationEventRevoked(_ authorizationEventID: String,
+                                     issuer: URL) async throws -> Bool
     func admitIssuer(_ issuer: URL) async throws
     func admittedIssuers() async throws -> [URL]
 }
@@ -637,6 +665,64 @@ private struct FountainAuthAuthorityStateSnapshot: Codable, Sendable {
     var authorizationCodes: [String: [String: FountainAuthStoredAuthorizationCode]] = [:]
     var revokedTokenIDs: [String: Set<String>] = [:]
     var admittedIssuerStrings: Set<String> = []
+    var issuedAuthorizationEvents: [String: [String: FountainAuthIssuedAuthorizationEvent]] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case clients, authorizationCodes, revokedTokenIDs, admittedIssuerStrings
+        case issuedAuthorizationEvents
+    }
+
+    init() {}
+
+    /// Legacy snapshots lack event-level revocation and must still decode.
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        clients = try values.decodeIfPresent(
+            [String: [String: FountainAuthClientRegistration]].self,
+            forKey: .clients) ?? [:]
+        authorizationCodes = try values.decodeIfPresent(
+            [String: [String: FountainAuthStoredAuthorizationCode]].self,
+            forKey: .authorizationCodes) ?? [:]
+        revokedTokenIDs = try values.decodeIfPresent(
+            [String: Set<String>].self, forKey: .revokedTokenIDs) ?? [:]
+        admittedIssuerStrings = try values.decodeIfPresent(
+            Set<String>.self, forKey: .admittedIssuerStrings) ?? []
+        issuedAuthorizationEvents = try values.decodeIfPresent(
+            [String: [String: FountainAuthIssuedAuthorizationEvent]].self,
+            forKey: .issuedAuthorizationEvents) ?? [:]
+    }
+
+    mutating func recordIssued(_ event: FountainAuthIssuedAuthorizationEvent,
+                               issuer: URL) throws {
+        let key = try canonicalIssuerString(issuer)
+        guard !event.authorizationEventID.isEmpty, !event.clientID.isEmpty,
+              !event.revoked,
+              issuedAuthorizationEvents[key]?[event.authorizationEventID] == nil else {
+            throw FountainAuthError.authorityStateConflict
+        }
+        issuedAuthorizationEvents[key, default: [:]][event.authorizationEventID] = event
+    }
+
+    mutating func revokeIssued(_ authorizationEventID: String, issuer: URL,
+                               clientID: String, resource: URL) throws
+        -> FountainAuthAuthorizationRevokeOutcome {
+        let key = try canonicalIssuerString(issuer)
+        guard !authorizationEventID.isEmpty, !clientID.isEmpty,
+              let event = issuedAuthorizationEvents[key]?[authorizationEventID],
+              event.clientID == clientID, event.resource == resource else {
+            throw FountainAuthError.authorizationDenied
+        }
+        if event.revoked { return .alreadyRevoked }
+        var revoked = event
+        revoked.revoked = true
+        issuedAuthorizationEvents[key]?[authorizationEventID] = revoked
+        return .revoked
+    }
+
+    func isIssuedRevoked(_ authorizationEventID: String, issuer: URL) throws -> Bool {
+        let key = try canonicalIssuerString(issuer)
+        return issuedAuthorizationEvents[key]?[authorizationEventID]?.revoked == true
+    }
 }
 
 public actor FountainAuthMemoryAuthorityStateStore: FountainAuthAuthorityStateStore {
@@ -676,6 +762,23 @@ public actor FountainAuthMemoryAuthorityStateStore: FountainAuthAuthorityStateSt
 
     public func isTokenRevoked(_ tokenID: String, issuer: URL) async throws -> Bool {
         snapshot.revokedTokenIDs[try canonicalIssuerString(issuer)]?.contains(tokenID) == true
+    }
+
+    public func recordIssuedAuthorizationEvent(_ event: FountainAuthIssuedAuthorizationEvent,
+                                               issuer: URL) async throws {
+        try snapshot.recordIssued(event, issuer: issuer)
+    }
+
+    public func revokeAuthorizationEvent(_ authorizationEventID: String, issuer: URL,
+                                         clientID: String, resource: URL) async throws
+        -> FountainAuthAuthorizationRevokeOutcome {
+        try snapshot.revokeIssued(authorizationEventID, issuer: issuer,
+                                clientID: clientID, resource: resource)
+    }
+
+    public func isAuthorizationEventRevoked(_ authorizationEventID: String,
+                                            issuer: URL) async throws -> Bool {
+        try snapshot.isIssuedRevoked(authorizationEventID, issuer: issuer)
     }
 
     public func admitIssuer(_ issuer: URL) async throws {
@@ -741,6 +844,32 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
         snapshot.revokedTokenIDs[try canonicalIssuerString(issuer)]?.contains(tokenID) == true
     }
 
+    public func recordIssuedAuthorizationEvent(_ event: FountainAuthIssuedAuthorizationEvent,
+                                               issuer: URL) async throws {
+        var next = snapshot
+        try next.recordIssued(event, issuer: issuer)
+        try persist(next)
+        snapshot = next
+    }
+
+    public func revokeAuthorizationEvent(_ authorizationEventID: String, issuer: URL,
+                                         clientID: String, resource: URL) async throws
+        -> FountainAuthAuthorizationRevokeOutcome {
+        var next = snapshot
+        let outcome = try next.revokeIssued(authorizationEventID, issuer: issuer,
+                                            clientID: clientID, resource: resource)
+        if outcome == .revoked {
+            try persist(next)
+            snapshot = next
+        }
+        return outcome
+    }
+
+    public func isAuthorizationEventRevoked(_ authorizationEventID: String,
+                                            issuer: URL) async throws -> Bool {
+        try snapshot.isIssuedRevoked(authorizationEventID, issuer: issuer)
+    }
+
     public func admitIssuer(_ issuer: URL) async throws {
         snapshot.admittedIssuerStrings.insert(try canonicalIssuerString(issuer))
         try persist()
@@ -750,10 +879,12 @@ public actor FountainAuthFileAuthorityStateStore: FountainAuthAuthorityStateStor
         snapshot.admittedIssuerStrings.sorted().compactMap(URL.init(string:))
     }
 
-    private func persist() throws {
+    private func persist() throws { try persist(snapshot) }
+
+    private func persist(_ next: FountainAuthAuthorityStateSnapshot) throws {
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(snapshot)
+        let data = try JSONEncoder().encode(next)
         try data.write(to: fileURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
@@ -912,6 +1043,11 @@ public actor FountainAuthAuthorizationServer {
             state: "issued",
             sessionCorrelationID: record.request.correlationID)
         try await evidenceLedger?.append(grant)
+        try await stateStore.recordIssuedAuthorizationEvent(
+            FountainAuthIssuedAuthorizationEvent(
+                authorizationEventID: record.authorizationEventID,
+                clientID: clientID, resource: resource),
+            issuer: metadata.issuer)
         return FountainAuthAccessToken(
             value: "\(encodedHeader).\(encodedPayload).\(base64URL(signature))",
             evidence: grant)
@@ -949,7 +1085,9 @@ public actor FountainAuthAuthorizationServer {
         guard Date(timeIntervalSince1970: expiry.doubleValue) > now else {
             throw FountainAuthError.tokenExpired
         }
-        guard try await !stateStore.isTokenRevoked(tokenID, issuer: metadata.issuer) else {
+        guard try await !stateStore.isTokenRevoked(tokenID, issuer: metadata.issuer),
+              try await !stateStore.isAuthorizationEventRevoked(
+                authorizationEventID, issuer: metadata.issuer) else {
             throw FountainAuthError.tokenRevoked
         }
         let scopes = scopeText.split(separator: " ").map(String.init)
@@ -965,6 +1103,16 @@ public actor FountainAuthAuthorizationServer {
             authorizationEventID: authorizationEventID,
             tokenID: tokenID,
             expiresAt: Date(timeIntervalSince1970: expiry.doubleValue))
+    }
+
+    /// The host authenticates the owner before invoking this exact bounded
+    /// event revoke. A client registration or guessable event is not consent.
+    public func revokeAuthorizationEvent(_ authorizationEventID: String,
+                                         clientID: String, resource: URL) async throws
+        -> FountainAuthAuthorizationRevokeOutcome {
+        try await stateStore.revokeAuthorizationEvent(
+            authorizationEventID, issuer: metadata.issuer,
+            clientID: clientID, resource: resource)
     }
 
     public func revoke(_ token: FountainAuthAccessToken) async throws {
