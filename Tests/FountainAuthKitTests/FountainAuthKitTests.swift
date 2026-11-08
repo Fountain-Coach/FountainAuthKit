@@ -681,7 +681,7 @@ extension FountainAuthKitTests {
             verifier: verifier, resource: resource)
         let publicResourceValidator = try FountainAuthProtectedResourceValidator(
             issuer: issuer, keyStore: keys,
-            isRevoked: { tokenID, eventID, exactIssuer in
+            isRevoked: { tokenID, eventID, exactIssuer, _, _ in
                 if try await state.isTokenRevoked(tokenID, issuer: exactIssuer) {
                     return true
                 }
@@ -709,7 +709,7 @@ extension FountainAuthKitTests {
         let reopened = try FountainAuthFileAuthorityStateStore(fileURL: stateURL)
         let validatorAfterRestart = try FountainAuthProtectedResourceValidator(
             issuer: issuer, keyStore: keys,
-            isRevoked: { tokenID, eventID, exactIssuer in
+            isRevoked: { tokenID, eventID, exactIssuer, _, _ in
                 if try await reopened.isTokenRevoked(tokenID, issuer: exactIssuer) {
                     return true
                 }
@@ -727,7 +727,7 @@ extension FountainAuthKitTests {
         enum RevocationReaderDown: Error { case offline }
         let unavailable = try FountainAuthProtectedResourceValidator(
             issuer: issuer, keyStore: keys,
-            isRevoked: { _, _, _ in throw RevocationReaderDown.offline })
+            isRevoked: { _, _, _, _, _ in throw RevocationReaderDown.offline })
         do {
             _ = try await unavailable.validateBearer(
                 access.value, resource: resource,
@@ -744,6 +744,70 @@ extension FountainAuthKitTests {
         } catch {
             XCTAssertEqual(error as? FountainAuthError, .invalidToken)
         }
+    }
+
+    func testFileRevocationReaderSeesIssuerWritesAfterConstructionAndDeniesUnavailableState() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("FountainAuthKit-reader-" + UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("authority.json")
+        let issuer = URL(string: "https://auth.fresh-reader.example")!
+        let foreignIssuer = URL(string: "https://auth.foreign-reader.example")!
+        let resource = URL(string: "https://mcp.fresh-reader.example/mcp")!
+        let wrongResource = URL(string: "https://other.fresh-reader.example/mcp")!
+        let clientID = "scenario-isolated-client"
+        let eventID = "scenario-authorization-event"
+        let tokenID = "scenario-short-lived-token"
+        let writer = try FountainAuthFileAuthorityStateStore(fileURL: fileURL)
+        let reader = try FountainAuthFileRevocationReader(fileURL: fileURL)
+
+        // Missing state cannot silently become an allow.
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: clientID, resource: resource))
+
+        try await writer.recordIssuedAuthorizationEvent(
+            FountainAuthIssuedAuthorizationEvent(
+                authorizationEventID: eventID, clientID: clientID, resource: resource),
+            issuer: issuer)
+        XCTAssertFalse(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: clientID, resource: resource))
+
+        // The validator is a separate long-running consumer. It must read the
+        // issuer's NEW bytes rather than a snapshot captured when constructed.
+        let issuerWriter = try FountainAuthFileAuthorityStateStore(fileURL: fileURL)
+        let result = try await issuerWriter.revokeAuthorizationEvent(
+            eventID, issuer: issuer, clientID: clientID, resource: resource)
+        XCTAssertEqual(result, .revoked)
+        XCTAssertTrue(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: clientID, resource: resource))
+
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: "other-client", resource: resource))
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: clientID, resource: wrongResource))
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: foreignIssuer, clientID: clientID, resource: resource))
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: "unknown-event",
+            issuer: issuer, clientID: clientID, resource: resource))
+
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o644], ofItemAtPath: fileURL.path)
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: clientID, resource: resource))
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        try Data("not-json".utf8).write(to: fileURL, options: .atomic)
+        XCTAssertThrowsError(try reader.isRevoked(
+            tokenID: tokenID, authorizationEventID: eventID,
+            issuer: issuer, clientID: clientID, resource: resource))
     }
 
     func testLegacyAuthoritySnapshotDecodesWithoutIssuedEventIndex() async throws {
