@@ -3,6 +3,41 @@ import Foundation
 /// Read-only compatibility preflight for the existing Host issuer's rotating
 /// refresh-family JSON. This checks a migration source; it neither imports an
 /// authority nor changes grants, keys, registries, or bearer credentials.
+/// Digest-only legacy-compatible refresh family. Never stores a bearer.
+/// Its Codable keys and default Date encoding match the active Host registry.
+public struct FountainAuthRefreshFamily: Codable, Equatable, Sendable {
+    public let familyID: String
+    public let clientID: String
+    public let resource: URL
+    public let subjectReference: String
+    public let grantedScope: [String]
+    public let authorizedAt: Date
+    public let expiresAt: Date
+    public let authorizationEventID: String
+    public let authenticationMechanism: String
+    public let correlationID: String
+    public var currentDigest: String
+    public var consumedDigests: [String]
+    public var revoked: Bool
+
+    public init(familyID: String, clientID: String, resource: URL,
+                subjectReference: String, grantedScope: [String],
+                authorizedAt: Date, expiresAt: Date,
+                authorizationEventID: String, authenticationMechanism: String,
+                correlationID: String, currentDigest: String,
+                consumedDigests: [String] = [], revoked: Bool = false) {
+        self.familyID = familyID; self.clientID = clientID
+        self.resource = resource; self.subjectReference = subjectReference
+        self.grantedScope = grantedScope; self.authorizedAt = authorizedAt
+        self.expiresAt = expiresAt; self.authorizationEventID = authorizationEventID
+        self.authenticationMechanism = authenticationMechanism
+        self.correlationID = correlationID; self.currentDigest = currentDigest
+        self.consumedDigests = consumedDigests; self.revoked = revoked
+    }
+}
+
+/// Exact legacy array import validation. The selected issuer is supplied
+/// separately by the host; the source JSON does not bind its own issuer.
 public enum FountainAuthLegacyRefreshPreflight {
     public struct Receipt: Equatable, Sendable {
         public let clients: Int
@@ -11,20 +46,19 @@ public enum FountainAuthLegacyRefreshPreflight {
         public let authorizationEvents: Int
     }
 
-    private struct LegacyFamily: Codable {
-        let familyID: String
-        let clientID: String
-        let resource: URL
-        let subjectReference: String
-        let grantedScope: [String]
-        let authorizedAt: Date
-        let expiresAt: Date
-        let authorizationEventID: String
-        let authenticationMechanism: String
-        let correlationID: String
-        let currentDigest: String
-        let consumedDigests: [String]
-        let revoked: Bool
+
+    /// Decode only after full lineage and digest validation.
+    public static func decode(clientsJSON: Data, refreshFamiliesJSON: Data,
+                              permittedResource: URL) throws
+        -> (clients: [FountainAuthClientRegistration],
+            families: [FountainAuthRefreshFamily]) {
+        _ = try inspect(clientsJSON: clientsJSON,
+                        refreshFamiliesJSON: refreshFamiliesJSON,
+                        permittedResource: permittedResource)
+        let decoder = JSONDecoder()
+        return (
+            try decoder.decode([FountainAuthClientRegistration].self, from: clientsJSON),
+            try decoder.decode([FountainAuthRefreshFamily].self, from: refreshFamiliesJSON))
     }
 
     /// Both inputs are bytes supplied by the caller from the *same* frozen
@@ -41,7 +75,7 @@ public enum FountainAuthLegacyRefreshPreflight {
         let decoder = JSONDecoder()
         let clients = try decoder.decode([FountainAuthClientRegistration].self,
                                          from: clientsJSON)
-        let families = try decoder.decode([LegacyFamily].self,
+        let families = try decoder.decode([FountainAuthRefreshFamily].self,
                                           from: refreshFamiliesJSON)
         let registered = Set(clients.map(\.clientID))
         guard registered.count == clients.count else {
