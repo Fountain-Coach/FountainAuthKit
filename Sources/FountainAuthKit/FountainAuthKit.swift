@@ -260,9 +260,14 @@ public struct FountainAuthSigningKey: Sendable {
     }
 }
 
-public protocol FountainAuthSigningKeyStore: Sendable {
-    func activeSigningKey() async throws -> FountainAuthSigningKey
+/// Public-key-only verification contract. Resource adapters never need signing
+/// material and must query verification keys against the current lifecycle.
+public protocol FountainAuthVerificationKeyStore: Sendable {
     func verificationKeys(now: Date) async throws -> [String: Data]
+}
+
+public protocol FountainAuthSigningKeyStore: FountainAuthVerificationKeyStore {
+    func activeSigningKey() async throws -> FountainAuthSigningKey
 }
 
 public extension FountainAuthSigningKeyStore {
@@ -1125,6 +1130,83 @@ public actor FountainAuthAuthorizationServer {
             throw FountainAuthError.invalidToken
         }
         try await stateStore.revokeTokenID(tokenID, issuer: metadata.issuer)
+    }
+}
+
+/// Validates a signed access token at the protected resource, not the issuer.
+/// Current issuer-scoped revocation MUST be checked on every admission through
+/// an injected host-owned reader. Failure to obtain that state refuses access.
+/// Neither this adapter nor its closure may authorize or revoke a grant.
+public struct FountainAuthProtectedResourceValidator: Sendable {
+    public typealias RevocationCheck = @Sendable (
+        _ tokenID: String, _ authorizationEventID: String, _ issuer: URL
+    ) async throws -> Bool
+
+    public let issuer: URL
+    private let keyStore: any FountainAuthVerificationKeyStore
+    private let isRevoked: RevocationCheck
+
+    public init(issuer: URL,
+                keyStore: any FountainAuthVerificationKeyStore,
+                isRevoked: @escaping RevocationCheck) throws {
+        _ = try canonicalIssuerString(issuer)
+        self.issuer = issuer
+        self.keyStore = keyStore
+        self.isRevoked = isRevoked
+    }
+
+    public func validateBearer(_ bearer: String,
+                               resource: URL,
+                               requiredScope: String,
+                               now: Date = Date()) async throws -> FountainAuthValidatedGrant {
+        guard !bearer.isEmpty,
+              resource.scheme?.lowercased() == "https",
+              resource.host?.isEmpty == false,
+              !requiredScope.isEmpty else {
+            throw FountainAuthError.invalidToken
+        }
+        let parts = bearer.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 3,
+              let header = jsonObject(parts[0]),
+              let payload = jsonObject(parts[1]),
+              header["alg"] as? String == "EdDSA",
+              header["typ"] as? String == "at+jwt",
+              let kid = header["kid"] as? String,
+              let signature = Data(base64URL: String(parts[2])),
+              let signingInput = "\(parts[0]).\(parts[1])".data(using: .utf8),
+              let issuerText = payload["iss"] as? String,
+              issuerText == issuer.absoluteString,
+              let audience = payload["aud"] as? String,
+              audience == resource.absoluteString,
+              let subject = payload["sub"] as? String, !subject.isEmpty,
+              let clientID = payload["client_id"] as? String, !clientID.isEmpty,
+              let scopeText = payload["scope"] as? String,
+              let tokenID = payload["jti"] as? String, !tokenID.isEmpty,
+              let eventID = payload["authorization_event"] as? String, !eventID.isEmpty,
+              let expiry = payload["exp"] as? NSNumber else {
+            throw FountainAuthError.invalidToken
+        }
+        guard let publicData = try await keyStore.verificationKeys(now: now)[kid],
+              let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: publicData),
+              publicKey.isValidSignature(signature, for: signingInput) else {
+            throw FountainAuthError.invalidToken
+        }
+        let expiresAt = Date(timeIntervalSince1970: expiry.doubleValue)
+        guard expiresAt > now else { throw FountainAuthError.tokenExpired }
+
+        // A static startup list or an unchecked cached "not revoked" decision
+        // is not acceptable: the owning reader must establish CURRENT state.
+        guard try await !isRevoked(tokenID, eventID, issuer) else {
+            throw FountainAuthError.tokenRevoked
+        }
+        let scopes = scopeText.split(separator: " ").map(String.init)
+        guard scopes.contains(requiredScope) else {
+            throw FountainAuthError.scopeMissing(requiredScope)
+        }
+        return FountainAuthValidatedGrant(
+            issuer: issuer, subjectReference: subject, clientID: clientID,
+            resource: resource, scope: scopes, authorizationEventID: eventID,
+            tokenID: tokenID, expiresAt: expiresAt)
     }
 }
 
