@@ -176,6 +176,13 @@ public struct FountainAuthAccessToken: Sendable, Equatable {
     public let evidence: FountainAuthGrantEvidence
 }
 
+/// Short-lived signed access plus rotating opaque refresh bearer.
+/// Never encode this pair into an authority snapshot.
+public struct FountainAuthTokenPair: Sendable {
+    public let access: FountainAuthAccessToken
+    public let refreshToken: String
+}
+
 /// Safe durable lineage. It intentionally has no bearer, refresh token,
 /// authorization code, password, or private-key field.
 public struct FountainAuthGrantEvidence: Codable, Equatable, Sendable {
@@ -1147,6 +1154,7 @@ public actor FountainAuthAuthorizationServer {
     private let stateStore: any FountainAuthAuthorityStateStore
     private let codeLifetime: TimeInterval
     private let tokenLifetime: TimeInterval
+    private let refreshLifetime: TimeInterval
 
     public init(metadata: FountainAuthServerMetadata,
                 keyStore: any FountainAuthSigningKeyStore,
@@ -1154,8 +1162,10 @@ public actor FountainAuthAuthorizationServer {
                 stateStore: (any FountainAuthAuthorityStateStore)? = nil,
                 policyVersion: String = "fountain-auth-policy-v1",
                 codeLifetime: TimeInterval = 120,
-                tokenLifetime: TimeInterval = 600) throws {
-        guard codeLifetime > 0, tokenLifetime > 0, !policyVersion.isEmpty else {
+                tokenLifetime: TimeInterval = 600,
+                refreshLifetime: TimeInterval = 7 * 24 * 60 * 60) throws {
+        guard codeLifetime > 0, tokenLifetime > 0, refreshLifetime > 0,
+              !policyVersion.isEmpty else {
             throw FountainAuthError.invalidRequest
         }
         self.metadata = metadata
@@ -1165,6 +1175,7 @@ public actor FountainAuthAuthorizationServer {
         self.policyVersion = policyVersion
         self.codeLifetime = codeLifetime
         self.tokenLifetime = tokenLifetime
+        self.refreshLifetime = refreshLifetime
     }
 
     public func register(_ client: FountainAuthClientRegistration) async throws {
