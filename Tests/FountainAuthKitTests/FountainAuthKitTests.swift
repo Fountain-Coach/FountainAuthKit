@@ -400,6 +400,48 @@ extension FountainAuthKitTests {
         }
     }
 
+    func testConsentPreflightValidatesClientRedirectAndScopeWithoutGranting() async throws {
+        let issuer = URL(string: "https://auth.writer.example")!
+        let (server, _, resource) = try await isolatedServer(issuer: issuer)
+        let redirect = URL(string: "http://reframe.localhost/callback")!
+        let challenge = FountainAuthAuthorizationRequest.s256Challenge(
+            verifier: String(repeating: "v", count: 48))
+        func request(client: String, redirect: URL, scope: [String]) throws -> FountainAuthAuthorizationRequest {
+            try FountainAuthAuthorizationRequest(
+                clientID: client, redirectURI: redirect, scope: scope,
+                state: "preflight-state", codeChallenge: challenge,
+                resource: resource, correlationID: "preflight-correlation",
+                expiresAt: Date().addingTimeInterval(90))
+        }
+        let admitted = try await server.preflightAuthorization(request(
+            client: "reframe-native", redirect: redirect,
+            scope: [FountainAuthHostDescribeAdmission.capability]))
+        XCTAssertEqual(admitted.clientID, "reframe-native")
+        XCTAssertTrue(admitted.redirectURIs.contains(redirect))
+        do {
+            _ = try await server.preflightAuthorization(request(
+                client: "unregistered", redirect: redirect,
+                scope: [FountainAuthHostDescribeAdmission.capability]))
+            XCTFail("unregistered client must not reach consent")
+        } catch { XCTAssertEqual(error as? FountainAuthError, .invalidClient) }
+        do {
+            _ = try await server.preflightAuthorization(request(
+                client: "reframe-native", redirect: URL(string: "https://attacker.example/cb")!,
+                scope: [FountainAuthHostDescribeAdmission.capability]))
+            XCTFail("unregistered redirect must not reach consent")
+        } catch { XCTAssertEqual(error as? FountainAuthError, .invalidRedirect) }
+        do {
+            _ = try await server.preflightAuthorization(request(
+                client: "reframe-native", redirect: redirect, scope: ["host.mutate"]))
+            XCTFail("unadmitted scope must not reach consent")
+        } catch { XCTAssertEqual(error as? FountainAuthError, .scopeMissing("host.mutate")) }
+        let actual = try request(client: "reframe-native", redirect: redirect,
+                                 scope: [FountainAuthHostDescribeAdmission.capability])
+        let code = try await server.begin(actual, subjectReference: "subject:writer",
+            authenticationMechanism: "fixture-owner", decision: .approved)
+        XCTAssertFalse(code.value.isEmpty)
+    }
+
     func testUnknownClientAndInvalidPKCEFailClosed() async throws {
         let issuer = URL(string: "https://auth.writer.example")!
         let (server, _, resource) = try await isolatedServer(issuer: issuer)

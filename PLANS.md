@@ -1,5 +1,26 @@
 # Plan and history-first reconstruction
 
+## Owner production authority — 12 November 2026
+
+**Writer decision:** External independent review is a separate assurance claim, not a universal prerequisite to a single-owner Fountain Coach release. Actual external legal/contractual assessment mandates remain binding. Source tests cannot be called independently reviewed.
+
+**Chapters read:** 07 no invented prerequisites; 08 source/Host/Store/HTTPS evidence; 90 owner release and external review orthogonal; 142 Kit grants; 161 owner client control.
+**Forbidden:** self-proclaimed third-party assurance, silent refresh/signing mutation, and invented owner device proof.
+**Conflict:** Former K2/K3 demanded an unavailable external reviewer as a prerequisite, conflicting with the owner's release authority. Correct this explicit operational deadlock.
+**Excluded:** actual Kit tag, live Hetzner service migration, recovery-device enrollment, applicable legal classification and Host revocation proof remain separate.
+
+**Owner path:** K1 named source and negative tests; K2 owner risk disposition and required external classification, recovery, rollback and grant continuity; K3 exact Kit release; K4 Host rebuild and protected-service tests; K5 reversible issuer release; K6 real owner device, issuer/Host/Store readback. External review is required only when exact applicable law, contract or owner-adopted rule says so; no unsupported security-review claim.
+
+
+## PR #107 consent preflight — source-only Kit seam (12 November 2026)
+
+**Chapters read:** 07 history-first reuse; 08 distinct source/issuer/browser proofs; 90 independent security approval cannot be self-issued; 142 FountainAuthKit alone validates client registration and policy; 161 no rendered consent for unknown clients/redirects.
+**What they forbid here:** reproducing an authorization registry in the Host, rendering a misleading authorization screen for an unregistered redirect, mutating live client/grant state, or treating a test as independent security admission.
+**Conflicts:** user-directed autonomous passkey progress versus external independent review and owner-device gesture: implement safe source-only correction without bypassing those gates.
+**Excluded, and why:** Kit version tag, public issuer cutover, new account store, second recovery mechanism, Access client UI and real iPad ceremony are separate owner/security acceptance boundaries.
+
+**History-first reuse:** FountainAuthAuthorizationServer.begin already reads the single issuer stateStore.client and calls FountainAuthAuthorizationRequest.validate before code issuance. A pre-consent screen needs that exact predicate **before** displaying approval; the current Host has no public read-only API for it. Expose preflightAuthorization on the existing Kit server, reuse it from begin, never write state. Test unknown client, mismatched redirect, unadmitted scope and authorized normal flow. Host PR #107 remains draft pending independent security admission.
+
 **Live-legacy compatibility witness — 8 November 2026:** Read-only SSH snapshot of the *actual* live Hetzner `clients.json` and `refresh-families.json` was relayed encrypted to an owner-only ephemeral Ubuntu `/tmp` folder (not Git, no raw records printed). Exact Kit Host OAuth executable `--inspect-frozen-legacy` returned `PASS clients=3 families=1`; one-shot `--import-frozen-legacy` returned `COMPLETE clients=3 families=1`, wrote a `0600` isolated authority snapshot and refused a second import. The synthetic signing key/owner password were generated only in the test directory; production signing key, clients, refresh family, issuer and Caddy were **not modified**. Entire temporary imported state and copied legacy bytes were destroyed, and deletion independently checked. This clears the *real source-record encoding/import* compatibility question but does not establish plaintext ChatGPT refresh-token continuity, public signing-key parity, independent security review, live Store/MCP denial, or physical iPad reconnect. The tested import **must not** be mistaken for a production migration.
 
 
@@ -17,9 +38,9 @@
 | Phase | Native next action | Admission / terminal predicate | Status |
 | --- | --- | --- | --- |
 | K1 | Confirm exact PR source, CI, `GOAL.md`, `AUTHORITY.md`, scenario JSON/Swift and secret-shape scan | Clean source, named revision, tests and checked projection agree | Source tested; revalidate after any change |
-| K2 | Obtain independent review of authorization/security change and migration/rollback scope | Non-author review recorded; findings closed or explicitly accepted by owner | **PENDING, cannot self-approve** |
-| K3 | Admit semver release on owning repository with signed/versioned tag, changelog and exact source SHA/digests | Named reproducible released Kit, acceptance report promoted by owning authority | BLOCKED on K2 |
-| K4 | Pin Host consumer to the admitted Kit release instead of its candidate commit | Native Host OAuth/MCP/Store/refresh tests and binary hashes match pinned version | BLOCKED on K3 |
+| K2 | Record owner risk, scope, security failures, issuer continuity, rollback and applicable legal classification | Recorded owner risk decision, no fictional independent review | OPEN: risk evidence |
+| K3 | Admit source-bound semver Kit release after K2 owner approval and evidence | Reproducible named release and preserved predecessor | Awaiting owner-source admission |
+| K4 | Pin Host consumer to the admitted Kit release instead of its candidate commit | Native Host OAuth/MCP/Store/refresh tests and binary hashes match pinned version | Awaiting Kit release artifact |
 | K5 | Prove Hetzner freeze, one issuer writer, private signing identity unchanged, reversible predecessor and old ChatGPT refresh continuity | Exact native service/Store/HTTPS receipts and independent real-client denial | Requires Host target release readiness |
 | K6 | Confirm installed ChatGPT iPad reconnect, refresh and `host.describe`, then Press real grant revoke | Physical iPad + independent MCP/Store witnesses | Not executed |
 
