@@ -1,0 +1,69 @@
+{
+  "id": "fcis-legacy-refresh-continuity",
+  "version": "0.1.0",
+  "instrument": "fountaincoach.authorization@0.1.0",
+  "targetKind": "system-boundary",
+  "owner": "FountainAuthKit",
+  "consumer": "Hetzner Fountain Host MCP issuer + protected resource, then Fountain Press",
+  "state": "fixture-tested-candidate-not-live",
+  "claimBoundary": "isolated migration contract only; no existing ChatGPT refresh family was read, rotated, revoked, imported or modified",
+  "preconditions": [
+    "isolated fixture reproduces deployed legacy clients.json and refresh-families.json representations with safe synthetic digests, not actual owner credentials",
+    "original deployed issuer identity and live ChatGPT registration and refresh families remain untouched",
+    "one existing OAuth signing identity is used throughout; no new key or second concurrent writable issuer",
+    "existing FountainAuthKit authority record and legacy refresh-family digest are the only input authorities"
+  ],
+  "actions": [
+    {
+      "id": "reconstruct",
+      "intent": "Read exact isolated legacy DCR clients and refresh-family digest records without bearer bytes",
+      "expected": "one typed, issuer-bound authority projection with no silent missing grant"
+    },
+    {
+      "id": "preserve",
+      "intent": "Upgrade state format without losing existing client redirects, granted scopes, expiry, event ID, or consumed digests",
+      "expected": "identical client and refresh-family semantics and reversible predecessor"
+    },
+    {
+      "id": "rotate",
+      "intent": "Redeem one previously issued synthetic opaque refresh token for the same client and resource",
+      "expected": "one new access/refresh pair, previous digest marked consumed, original authorization event retained"
+    },
+    {
+      "id": "replay",
+      "intent": "Replay the spent synthetic refresh credential and repeat after issuer restart",
+      "expected": "refused and family revoked, with no newly issued access"
+    },
+    {
+      "id": "revoke",
+      "intent": "Owner revokes the exact isolated authorization event and resource independently rejects old access",
+      "expected": "revoked, then already-revoked, prior bearer denied at protected resource"
+    },
+    {
+      "id": "reconsent",
+      "intent": "Owner grants fresh consent through existing PKCE and verifies execution",
+      "expected": "new event authorizes only the intended scope and client"
+    }
+  ],
+  "terminalPredicates": [
+    "legacy JSON inputs remain readable and retain all existing digest/lineage/PKCE information",
+    "both old and new state formats remain provably migratable without a second writable authority",
+    "refresh rotation and replay/refusal remain functional after process restart",
+    "revocation immediately blocks both refresh and existing access at a separate protected resource, even after restart",
+    "new explicit consent restores access only by a distinct event",
+    "unknown event, unsupported migration, wrong issuer/client/resource and missing current state fail closed",
+    "no production ChatGPT registration, token, key, client or FountainStore record was modified"
+  ],
+  "witnesses": {
+    "unit": "isolated Swift fixture tests with fake digest tokens and existing old JSON format",
+    "consumer": "explicit Host source revision and released Kit version, not local path",
+    "store": "durable terminal Store receipt and protected-resource denial required after kit release",
+    "ux": "Press single-leaf AX and window evidence required only after real Host acceptance"
+  },
+  "forbidden": [
+    "parallel issuer or owner authorization database",
+    "migration by copying plaintext bearer credentials",
+    "new owner signing ceremony or portal",
+    "production changes before independent isolated validation"
+  ]
+}
