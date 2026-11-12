@@ -1,5 +1,14 @@
 # Plan and history-first reconstruction
 
+## PR #107 consent preflight — source-only Kit seam (12 November 2026)
+
+**Chapters read:** 07 history-first reuse; 08 distinct source/issuer/browser proofs; 90 independent security approval cannot be self-issued; 142 FountainAuthKit alone validates client registration and policy; 161 no rendered consent for unknown clients/redirects.
+**What they forbid here:** reproducing an authorization registry in the Host, rendering a misleading authorization screen for an unregistered redirect, mutating live client/grant state, or treating a test as independent security admission.
+**Conflicts:** user-directed autonomous passkey progress versus external independent review and owner-device gesture: implement safe source-only correction without bypassing those gates.
+**Excluded, and why:** Kit version tag, public issuer cutover, new account store, second recovery mechanism, Access client UI and real iPad ceremony are separate owner/security acceptance boundaries.
+
+**History-first reuse:** FountainAuthAuthorizationServer.begin already reads the single issuer stateStore.client and calls FountainAuthAuthorizationRequest.validate before code issuance. A pre-consent screen needs that exact predicate **before** displaying approval; the current Host has no public read-only API for it. Expose preflightAuthorization on the existing Kit server, reuse it from begin, never write state. Test unknown client, mismatched redirect, unadmitted scope and authorized normal flow. Host PR #107 remains draft pending independent security admission.
+
 **Live-legacy compatibility witness — 8 November 2026:** Read-only SSH snapshot of the *actual* live Hetzner `clients.json` and `refresh-families.json` was relayed encrypted to an owner-only ephemeral Ubuntu `/tmp` folder (not Git, no raw records printed). Exact Kit Host OAuth executable `--inspect-frozen-legacy` returned `PASS clients=3 families=1`; one-shot `--import-frozen-legacy` returned `COMPLETE clients=3 families=1`, wrote a `0600` isolated authority snapshot and refused a second import. The synthetic signing key/owner password were generated only in the test directory; production signing key, clients, refresh family, issuer and Caddy were **not modified**. Entire temporary imported state and copied legacy bytes were destroyed, and deletion independently checked. This clears the *real source-record encoding/import* compatibility question but does not establish plaintext ChatGPT refresh-token continuity, public signing-key parity, independent security review, live Store/MCP denial, or physical iPad reconnect. The tested import **must not** be mistaken for a production migration.
 
 

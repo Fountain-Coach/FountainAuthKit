@@ -1221,20 +1221,30 @@ public actor FountainAuthAuthorizationServer {
         try await stateStore.register(client: client, issuer: metadata.issuer)
     }
 
+    /// Read-only consent preflight: exact registered client/redirect, admitted
+    /// scope, PKCE and expiry, before rendering any client authorization page.
+    /// This must never mint a code, create a grant, or infer human approval.
+    public func preflightAuthorization(_ request: FountainAuthAuthorizationRequest,
+                                       now: Date = Date()) async throws -> FountainAuthClientRegistration {
+        guard let registration = try await stateStore.client(
+            issuer: metadata.issuer, clientID: request.clientID) else {
+            throw FountainAuthError.invalidClient
+        }
+        try request.validate(against: registration,
+                             supportedScopes: Set(metadata.scopesSupported), now: now)
+        return registration
+    }
+
     public func begin(_ request: FountainAuthAuthorizationRequest,
                       subjectReference: String,
                       authenticationMechanism: String,
                       decision: FountainAuthHumanDecision,
                       now: Date = Date()) async throws -> FountainAuthAuthorizationCode {
         guard decision == .approved else { throw FountainAuthError.authorizationDenied }
-        guard !subjectReference.isEmpty, !authenticationMechanism.isEmpty,
-              let registration = try await stateStore.client(issuer: metadata.issuer,
-                                                             clientID: request.clientID) else {
-            throw FountainAuthError.invalidClient
+        guard !subjectReference.isEmpty, !authenticationMechanism.isEmpty else {
+            throw FountainAuthError.authorizationDenied
         }
-        try request.validate(against: registration,
-                             supportedScopes: Set(metadata.scopesSupported),
-                             now: now)
+        _ = try await preflightAuthorization(request, now: now)
         let value = randomOpaqueValue()
         let expires = min(request.expiresAt, now.addingTimeInterval(codeLifetime))
         let authorizationEventID = UUID().uuidString
