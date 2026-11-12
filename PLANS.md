@@ -1,5 +1,15 @@
 # Plan and history-first reconstruction
 
+## Kit 0.2.0 source-release phase — 12 November 2026
+
+**Chapters read:** 07 existing Kit owner and source continuity; 08 tests are not runtime witness; 90 owner authorization and external assurance separate; 142 sole issuer; 161 login is not authorization.
+**Forbidden:** using a Kit tag to claim public passkey deployment, treating simulated clients as a real iPad, mutating production grant state, or saying outside review occurred.
+**Conflict:** the previous acceptance report combined package gates with Host migration and an unavailable reviewer. The owner corrected that unworkable universal prerequisite; preserve the actual live-service tests as separate.
+**Excluded:** service deployment, domain/DNS, public owner credential, recovery device and exact commercial legal classification require distinct acceptance.
+
+**History-first:** v0.1.0 was released on Oct 7; PR #1 source merged at f89bb777, PR #2 preflight source merged at b2c121f. Package release 0.2.0 uses the existing same SwiftPM and GitHub infrastructure, not a parallel issuer. Verify full native 31-test source in Ubuntu, publish exact reviewed source revision with semver, repin Host consumer and repeat tests. Target still runs host-84c7d545 binaries without the previously proposed native publisher; do not conflate Kit version with executable deployment.
+
+
 ## Owner production authority — 12 November 2026
 
 **Writer decision:** External independent review is a separate assurance claim, not a universal prerequisite to a single-owner Fountain Coach release. Actual external legal/contractual assessment mandates remain binding. Source tests cannot be called independently reviewed.

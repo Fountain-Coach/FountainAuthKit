@@ -1,5 +1,22 @@
 # Acceptance report
 
+## FountainAuthKit 0.2.0 — source-only package admission (12 November 2026)
+
+**Owner release scope:** The single-writer authorization Kit implementation and source checks may be versioned without calling the live Hetzner service or independent external review accepted. Owner approval for evidence-backed releases is explicit (Governance Chapter 90, canonical main f12263a). A Swift package release does not activate passkeys on the public issuer.
+
+| Gate | Result | Exact evidence |
+| --- | --- | --- |
+| Canonical source history | PASS | PR #1 merge f89bb777, PR #2 merge b2c121f, Kit 0.1.0 as predecessor |
+| Merged source Ubuntu Swift | PASS | 31/31 native tests, no failures, isolated complete checkout |
+| GitHub tests | PASS on implementation | Both merged PRs have successful test checks; require final release-source CI |
+| Kit issuer/PKCE/refresh/atomicity scope | PASS in package | Persisted client and grant state, replay denial, scope/client/redirect preflight, legacy import refusals |
+| Owner source release authority | AUTHORIZED | Explicit owner instruction, real native tests and named review revisions; no independent-review claim |
+| Public issuer/grant migration, real iPad, Store revoke proof | NOT_ESTABLISHED | Distinct Host/device/production acceptance |
+| Independent security review/certification | NOT_CLAIMED | Optional outside assurance unless actual legal/contract obligation requires it |
+
+**Decision:** source-only versioned 0.2.0 is admissible after a final matching source/CI check. The distinct live-service blocked items below remain blocked, not erased by this scoped package release.
+
+
 ## Slice F — Manage Client Access candidate (8 November 2026)
 
 **Result: LOCALLY TESTED CANDIDATE. NOT ADMITTED, NOT SEMANTICALLY RELEASED, NOT LIVE ACCEPTED.**
@@ -20,7 +37,7 @@ This section is additive and does not revise the separate 7 October v0.1.0 accep
 | Fountain Press working owner leaf and native iPad acceptance | PASS (isolated local client); live NOT CLAIMED | Press PR #8 `f493ca3bbb46d4e4ff5279825f3ad11f70cd4865`: 11/11 client tests and 3 synthetic browser viewports; native iPad, live Store/MCP denied grant and published route remain unaccepted |
 | Independent review / release authorization | PENDING | PR #1 ready and green; no independent review or authorized release. Repository has only the implementing GitHub collaborator `Contexter` listed and no eligible team reviewer surfaced as of 8 November; do not self-approve |
 
-**Release gate:** do not tag, merge as a released package, switch the production Host, import live credentials, mutate the live issuer, or publicly advertise the owner instrument while the rows above remain unaccepted. The existing live ChatGPT refresh family remains unaffected. The source is reviewable; promotion is a separate authority decision.
+**Historical 8 November gate:** a production Host cutover and real client acceptance were not established, so a live-service claim remains prohibited. The 12 November owner decision above separates a package source release from that deployment. Do not switch the production Host, import live credentials, mutate the issuer or advertise actual owner passkeys without their own evidence. The original ChatGPT refresh family is unchanged.
 
 ---
 

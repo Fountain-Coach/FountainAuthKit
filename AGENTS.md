@@ -24,4 +24,4 @@ Treat `GOAL.md` and `AUTHORITY.md` as controlling.
 - In-memory state is fixture-only where restart survival is required.
 - Host capability remains host-owned.
 - Keep multi-step work and scenario-row status in `PLANS.md`.
-- Do not tag or publish a semantic release while an acceptance gate in `Scenario/evidence/acceptance-report.md` is blocked.
+- Do not tag or publish a semantic release while a **package-scope** acceptance gate in `Scenario/evidence/acceptance-report.md` is blocked. Live issuer migration, physical iPad acceptance, Host deployment and external assurance are separate integration gates; never describe a library release as a deployed service.
