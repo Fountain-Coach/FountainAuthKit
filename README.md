@@ -1,5 +1,7 @@
 # FountainAuthKit
 
+> **FCIS architecture:** The [FCIS standalone Go stack specification](https://github.com/Fountain-Coach/.github/blob/main/FCIS-STACK.md) chooses an independent Go OAuth/owner runtime for FCIS. FountainAuthKit remains a separately owned reusable/historical authorization implementation, not a required Swift runtime component of the new FCIS production service.
+
 > **Your writing is not an account. It is a domain.**
 
 FountainAuthKit is part of a larger idea about publishing: the writer should not have to surrender authority over a work simply because publishing requires machinery.
