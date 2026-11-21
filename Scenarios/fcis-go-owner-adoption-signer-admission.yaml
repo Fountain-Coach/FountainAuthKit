@@ -1,0 +1,68 @@
+id: fcis-go-owner-adoption-signer-admission
+version: 0.1.0
+instrument: fountaincoach.authorization@0.1.0
+targetKind: system-boundary
+owner: FountainAuthKit
+consumer: Fountain Host FCIS owner-administration adapter
+capability: fcis-go-owner-adoption-signer-admission
+operationTopics:
+  - fountaincoach/fcis-go-owner-adoption-signer.admit
+  - fountaincoach/fcis-go-owner-adoption-signer.admit.result
+  - fountaincoach/fcis-go-owner-adoption-signer.revoke
+  - fountaincoach/fcis-go-owner-adoption-signer.revoke.result
+targetOrigin: https://go.fcis.fountain.coach
+purpose: fcis-go-owner-adoption-signer-admission
+operatorNamespace: fcis-go-owner-adoption
+claimBoundary: "SPECIFIED ONLY: no implemented owner approval adapter, Host operator, protected signer allowlist, FountainStore terminal, iPad assertion, credential import, or public cutover."
+preconditions:
+  - "the original Golden Key passkey session, authenticated through the existing owner issuer, is present and verified for this exact owner decision"
+  - "a new single-use owner decision is bound to the literal Go test origin, separate adoption purpose, host identity, exact signer public-key fingerprint, immutable source Git revision and digest, nonce, expiry, audience and idempotency key"
+  - "the signer private key stays in established SecretStore/native custody and never appears in the request, a Git file or evidence"
+  - "the existing service-release signer does not confer this separate adoption-signer authority"
+  - "the Host independently admits the exact versioned operator before any root-protected allowlist change; host.describe, shell, SSH and OAuth client grants are insufficient"
+  - "the original Swift issuer, existing owner public-credential source and live Go Store remain unchanged until later independent authorization"
+actions:
+  - id: admit
+    intent: "Owner approves exactly one Go owner-adoption signer through the existing Golden Key session; the authorized Host checks and applies only the typed, source-bound root allowlist effect"
+    expected: "admitted with immutable allowlist digest and FountainStore terminal receipt"
+  - id: duplicate
+    intent: "Repeat exactly the same idempotency key and approved effect after an admitted terminal"
+    expected: "already-admitted with original receipt and no additional mutation"
+  - id: wrong-authority
+    intent: "Attempt the operation with only host.describe, a client OAuth grant, a service-release signer or a claimed root shell session"
+    expected: "refused; no allowlist or Store mutation"
+  - id: wrong-binding
+    intent: "Present wrong origin, host, namespace, signer fingerprint, owner subject, source Git revision/digest, audience or use an expired approval"
+    expected: "refused without a privilege transition"
+  - id: replay
+    intent: "Replay a consumed approval with a different nonce, request payload or idempotency key"
+    expected: "refused without a second effect"
+  - id: revoke
+    intent: "Original owner separately approves one bounded revocation for the exact admitted signer and Host"
+    expected: "revoked with durable terminal and readback; no signer use remains possible"
+  - id: restart
+    intent: "Restart the Host adapter under unchanged security policy and read the terminal plus root allowlist"
+    expected: "admission or revocation persists exactly once, with no implicit OAuth or Host grant"
+terminalPredicates:
+  - "the authenticated original-owner assertion and the fresh signed decision are independently verified for the literal Go test origin and a bounded lease"
+  - "one exact signer fingerprint, adoption purpose, namespace, source revision/digest, host instance and owner subject are bound; service release signing cannot satisfy the predicate"
+  - "a separately admitted Host operator performs the only allowed root-protected signer-allowlist effect and records a bounded terminal receipt"
+  - "independent readback checks owner, permissions, complete allowlist bytes/digest and matched FountainStore receipt/sequence"
+  - "duplicate idempotency returns the same original terminal with zero second writes; replay, wrong host, stale session, wrong signer, missing Host grant and revocation refuse"
+  - "a revoked admission fails closed across restart; a fresh owner-authorized decision is required for any subsequent admission"
+  - "no private passkey, SecretStore key, bearer, refresh token or generic shell/path appears in transport, logs, Git or receipts"
+  - "no adoption import, client OAuth permission, Host execution grant or production issuer cutover is inferred from signer admission"
+refusalAndRecovery:
+  - "missing owner assertion, unreadable issuer or unsigned approval fails closed; no local Golden Key replay, second owner account or fallback provider"
+  - "mismatched audience, session, host, origin, purpose, public-key fingerprint, revision, digest, nonce, expiry or idempotency fails closed"
+  - "unadmitted Host executor and blocked operator command must not be retried through a different transport"
+  - "uncertain allowlist readback or missing FountainStore terminal cannot be labelled admitted; preserve recovery evidence and refuse further mutation"
+  - "revocation is separately authenticated and prevents any unused adoption approval from being exercised"
+witnesses:
+  kit: "deterministic signing/authorization fixture and scenario projection; not a live Golden Key WebAuthn assertion"
+  midi2: "canonical midi-backplane versioned admit/revoke request and result topics with a dedicated capability bit; no transport acceptance claim"
+  host: "admitted typed operation, root-protected allowlist owner/mode/digest readback and independent operator receipt required; NOT IMPLEMENTED"
+  store: "durable FountainStore terminal and sequence must match allowlist effect; NOT ESTABLISHED"
+  browser: "physical iPad Safari Golden Key approval in Owner Access is required; NOT ESTABLISHED"
+  security: "private signer retained in established custody, independent verifier policy, negative/replay checks required; NOT CERTIFIED"
+state: specified
